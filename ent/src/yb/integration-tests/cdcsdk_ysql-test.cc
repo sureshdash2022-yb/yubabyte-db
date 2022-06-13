@@ -69,11 +69,11 @@
 #include "yb/util/test_macros.h"
 #include "yb/util/thread.h"
 
-#include "yb/yql/pgwrapper/libpq_utils.h"
-#include "yb/yql/pgwrapper/pg_wrapper.h"
-
 #include "yb/yql/cql/ql/util/errcodes.h"
 #include "yb/yql/cql/ql/util/statement_result.h"
+
+#include "yb/yql/pgwrapper/libpq_utils.h"
+#include "yb/yql/pgwrapper/pg_wrapper.h"
 
 DECLARE_int64(cdc_intent_retention_ms);
 DECLARE_bool(enable_update_local_peer_min_index);
@@ -137,7 +137,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void VerifyCdcStateMatches(
       client::YBClient* client, const CDCStreamId& stream_id, const TabletId& tablet_id,
-      uint64_t term, uint64_t index) {
+      const uint64_t term, const uint64_t index) {
     client::TableHandle table;
     client::YBTableName cdc_state_table(
         YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
@@ -1347,11 +1347,11 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestTruncateTable)) {
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestGarbageCollectionFlag)) {
-  TestIntentGarbageCollectionFlag(1, true, 200);
+  TestIntentGarbageCollectionFlag(1, true, 2000);
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestGarbageCollectionWithSmallInterval)) {
-  TestIntentGarbageCollectionFlag(3, true, 200);
+  TestIntentGarbageCollectionFlag(3, true, 2000);
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestGarbageCollectionWithLargerInterval)) {
