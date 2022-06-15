@@ -1674,7 +1674,7 @@ TEST_F(
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultpleStreamOnSameTablet)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
-  FLAGS_cdc_intent_retention_ms = 2000;
+  FLAGS_cdc_intent_retention_ms = 10000;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   ASSERT_OK(SetUpWithParams(1, 1, false));
 
