@@ -1008,11 +1008,6 @@ Result<SetCDCCheckpointResponsePB> CDCServiceImpl::SetCDCCheckpoint(
   auto session = client()->NewSession();
   session->SetDeadline(deadline);
 
-  if (record->source_type == CDCSDK) {
-    RETURN_NOT_OK_SET_CODE(
-        impl_->CheckStreamActive(producer_tablet), CDCError(CDCErrorPB::INTERNAL_ERROR));
-    impl_->UpdateActiveTime(producer_tablet);
-  }
   RETURN_NOT_OK_SET_CODE(
       UpdateCheckpoint(
           producer_tablet, checkpoint, checkpoint, session, GetCurrentTimeMicros(), true),
@@ -1633,13 +1628,23 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
     }
 
     VLOG(1) << "stream_id: " << stream_id << ", tablet_id: " << tablet_id
-            << ", checkpoint: " << checkpoint << ", last replicated time: "
-            << last_replicated_time_str;
+            << ", checkpoint: " << checkpoint
+            << ", last replicated time: " << last_replicated_time_str;
+
+    // Add the {tablet_id, stream_id} pair to the set if its checkpoint is OpId::Max().
+    if (checkpoint == OpId::Max().ToString()) {
+      tablet_stream_to_be_deleted->insert({tablet_id, stream_id});
+    }
 
     auto get_stream_metadata = GetStream(stream_id);
     if (!get_stream_metadata.ok()) {
-      LOG(WARNING) << "Read invalid stream id: " << stream_id << " for tablet " << tablet_id << ": "
-                   << get_stream_metadata.status();
+      // Give dummy entry in tablet_min_checkpoint_map for the tablet, if tablet is
+      // Associated with a single stream.
+      if (tablet_min_checkpoint_map.find(tablet_id) == tablet_min_checkpoint_map.end()) {
+        auto& tablet_info = tablet_min_checkpoint_map[tablet_id];
+        tablet_info.cdc_op_id = OpId::Max();
+        tablet_info.cdc_sdk_op_id = OpId::Max();
+      }
       continue;
     }
     StreamMetadata& record = **get_stream_metadata;
@@ -1649,11 +1654,6 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
       LOG(WARNING) << "Read invalid op id " << row.column(1).string_value()
                    << " for tablet " << tablet_id << ": " << result.status();
       continue;
-    }
-
-    // Add the {tablet_id, stream_id} pair to the set if its checkpoint is OpId::Max().
-    if (checkpoint == OpId::Max().ToString()) {
-      tablet_stream_to_be_deleted->insert({tablet_id, stream_id});
     }
 
     // Find the minimum checkpoint op_id per tablet. This minimum op_id
