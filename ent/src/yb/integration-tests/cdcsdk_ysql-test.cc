@@ -1965,7 +1965,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestActiveStreamWithHigherTserver
   }
 
   LOG(INFO) << "suresh: check all the tablets.............";
- for (int tablet_idx = 0; tablet_idx < num_tablets; tablet_idx++) {
+  for (int tablet_idx = 0; tablet_idx < num_tablets; tablet_idx++) {
     for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
       for (const auto& peer : test_cluster()->GetTabletPeers(i)) {
         if (peer->tablet_id() == tablets[tablet_idx].tablet_id()) {
@@ -1974,6 +1974,21 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestActiveStreamWithHigherTserver
         }
       }
     }
+  }
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  vector<GetChangesResponsePB> change_resp(2);
+  // Call GetChanges for the stream-1 and stream-2
+  for (uint32_t idx = 0; idx < 2; idx++) {
+    change_resp[idx] = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+    uint32_t record_size = change_resp[idx].cdc_sdk_proto_records_size();
+    ASSERT_GE(record_size, 100);
+    LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
   }
 }
 
