@@ -184,11 +184,15 @@ Result<Timestamp> DateTime::TimestampFromString(const string& str,
       frac = AdjustPrecision(frac, m.str(7).size(), time_duration::num_fractional_digits());
       // constructing date_time and getting difference from epoch to set as Timestamp value
       try {
+        LOG(INFO) << "suresh: input year: " << year << " month: " << month << " day: " << day;
+        LOG(INFO) << "suresh: before creating the date object......";
         const date d(year, month, day);
+        LOG(INFO) << "suresh: After creating the date object......";
         const time_duration t(hours, minutes, seconds, frac);
         time_zone_ptr tz = VERIFY_RESULT(StringToTimezone(m.str(8), input_format.use_utc));
         return ToTimestamp(local_date_time(d, t, tz, local_date_time::NOT_DATE_TIME_ON_ERROR));
       } catch (std::exception& e) {
+        LOG(INFO) << "suresh: Inside the expection handler......";
         return STATUS(InvalidArgument, "Invalid timestamp", e.what());
       }
     }
