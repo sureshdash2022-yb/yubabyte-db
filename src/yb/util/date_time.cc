@@ -20,6 +20,7 @@
 #include <unicode/gregocal.h>
 
 #include <regex>
+#include <boost/exception/all.hpp>
 
 #include <boost/date_time/c_local_time_adjustor.hpp>
 #include <boost/date_time/local_time/local_time.hpp>
@@ -191,8 +192,10 @@ Result<Timestamp> DateTime::TimestampFromString(const string& str,
         const time_duration t(hours, minutes, seconds, frac);
         time_zone_ptr tz = VERIFY_RESULT(StringToTimezone(m.str(8), input_format.use_utc));
         return ToTimestamp(local_date_time(d, t, tz, local_date_time::NOT_DATE_TIME_ON_ERROR));
-      } catch (std::exception& e) {
+      } catch (const boost::exception& e) {
         LOG(INFO) << "suresh: Inside the expection handler......";
+        return STATUS(InvalidArgument, "Invalid timestamp", boost::diagnostic_information(e));
+      } catch (std::exception& e) {
         return STATUS(InvalidArgument, "Invalid timestamp", e.what());
       }
     }
