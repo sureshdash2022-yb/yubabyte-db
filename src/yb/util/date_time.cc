@@ -195,8 +195,6 @@ Result<Timestamp> DateTime::TimestampFromString(const string& str,
       } catch (const boost::exception& e) {
         LOG(INFO) << "suresh: Inside the expection handler......";
         return STATUS(InvalidArgument, "Invalid timestamp", boost::diagnostic_information(e));
-      } catch (std::exception& e) {
-        return STATUS(InvalidArgument, "Invalid timestamp", e.what());
       } catch (...) {
         return STATUS(InvalidArgument, "Invalid timestamp");
       }
