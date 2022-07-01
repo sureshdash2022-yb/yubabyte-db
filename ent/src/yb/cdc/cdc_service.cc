@@ -1040,6 +1040,14 @@ Result<SetCDCCheckpointResponsePB> CDCServiceImpl::SetCDCCheckpoint(
   bool set_latest_entry = req.bootstrap();
 
   if (set_latest_entry) {
+    if (!tablet_peer->log_available()) {
+      const string err_message = strings::Substitute(
+          "Unable to get the latest entry op id from "
+          "peer $0 and tablet $1 because its log object hasn't been initialized",
+          tablet_peer->permanent_uuid(), tablet_peer->tablet_id());
+      RETURN_NOT_OK_SET_CODE(
+          STATUS(ServiceUnavailable, err_message), CDCError(CDCErrorPB::INTERNAL_ERROR));
+    }
     checkpoint = tablet_peer->log()->GetLatestEntryOpId();
   } else {
     checkpoint = OpId::FromPB(req.checkpoint().op_id());
