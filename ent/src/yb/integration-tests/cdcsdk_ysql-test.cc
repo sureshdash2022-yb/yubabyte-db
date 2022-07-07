@@ -84,6 +84,8 @@ DECLARE_int32(cdc_state_checkpoint_update_interval_ms);
 DECLARE_int32(update_metrics_interval_ms);
 DECLARE_uint64(log_segment_size_bytes);
 DECLARE_uint64(consensus_max_batch_size_bytes);
+DECLARE_int32(cdc_min_replicated_index_considered_stale_secs);
+DECLARE_int32(log_min_seconds_to_retain);
 
 namespace yb {
 
@@ -2485,6 +2487,84 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestTransactionWithLargeBatchSize
   ASSERT_EQ(0, final_num_intents);
   LOG(INFO) << "Final number of intents: " << final_num_intents;
 }
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestLogGCedWithoutWrite)) {
+  FLAGS_update_min_cdc_indices_interval_secs = 100000;
+  FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
+  FLAGS_cdc_min_replicated_index_considered_stale_secs = 60;
+  //FLAGS_log_segment_size_bytes = 100;
+  FLAGS_log_segment_size_bytes = 100;
+  FLAGS_log_min_seconds_to_retain = 10;
+  ASSERT_OK(SetUpWithParams(1, 1, false));
+  const uint32_t num_tablets = 1;
+
+  auto table =
+      ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version=*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  //ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
+  ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
+#if 0
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+#endif
+  GetChangesResponsePB change_resp_1 = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  LOG(INFO) << "Number of records after first transaction: "
+            << change_resp_1.cdc_sdk_proto_records_size();
+
+  // ASSERT_OK(WriteRowsHelper(100 /* start */, 200 /* end */, &test_cluster_, true));
+  ASSERT_OK(WriteRows(100 /* start */, 200 /* end */, &test_cluster_));
+#if 1
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 100,
+      /* is_compaction = */ false));
+#endif
+  SleepFor(MonoDelta::FromSeconds(FLAGS_cdc_min_replicated_index_considered_stale_secs * 2));
+
+  //for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
+    test_cluster()->mini_tablet_server(0)->Shutdown();
+    ASSERT_OK(test_cluster()->mini_tablet_server(0)->Start());
+    ASSERT_OK(test_cluster()->mini_tablet_server(0)->WaitStarted());
+  //}
+
+  for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
+    for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
+      //&& tablet_peer->LeaderStatus() == consensus::LeaderStatus::LEADER_AND_READY)
+      if (tablet_peer->tablet_id() == tablets[0].tablet_id()) {
+        LOG(INFO) << "suresh: Running LogGC for tablet_id.......: " << tablets[0].tablet_id();
+        ASSERT_OK(tablet_peer->RunLogGC());
+      }
+    }
+  }
+
+
+
+  GetChangesResponsePB change_resp_2 =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp_1.cdc_sdk_checkpoint()));
+  //GetChangesResponsePB change_resp_2 =
+    //  ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+
+  LOG(INFO) << "Number of records after second transaction: "
+            << change_resp_2.cdc_sdk_proto_records_size();
+  for (int i = 0; i < change_resp_2.cdc_sdk_proto_records_size(); ++i) {
+    const CDCSDKProtoRecordPB record = change_resp_2.cdc_sdk_proto_records(i);
+    if (record.row_message().op() == RowMessage::INSERT) {
+      LOG(INFO) << "suresh: record idx: " << i
+                << " recrod key: " << record.row_message().new_tuple(0).datum_int32()
+                << " recrod value: " << record.row_message().new_tuple(1).datum_int32();
+    }
+  }
+  }
 
 }  // namespace enterprise
 }  // namespace cdc

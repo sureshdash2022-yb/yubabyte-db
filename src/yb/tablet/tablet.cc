@@ -1993,7 +1993,7 @@ Status Tablet::AlterSchema(ChangeMetadataOperation *operation) {
 
 Status Tablet::AlterWalRetentionSecs(ChangeMetadataOperation* operation) {
   if (operation->has_wal_retention_secs()) {
-    LOG_WITH_PREFIX(INFO) << "Altering metadata wal_retention_secs from "
+    LOG(INFO) << "suresh: Altering metadata wal_retention_secs from "
                           << metadata_->wal_retention_secs()
                           << " to " << operation->wal_retention_secs();
     metadata_->set_wal_retention_secs(operation->wal_retention_secs());

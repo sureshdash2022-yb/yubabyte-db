@@ -120,6 +120,8 @@ Status ChangeMetadataOperation::DoReplicated(int64_t leader_term, Status* comple
   size_t num_operations = 0;
 
   if (request()->has_wal_retention_secs()) {
+    LOG(INFO) << "suresh: There change in WAL Retention, set in meta as well as log: "
+              << request()->wal_retention_secs();
     // We don't consider wal retention changes as another operation because this value is always
     // sent together with the schema, as long as it has been changed in the master's sys-catalog.
     auto s = tablet->AlterWalRetentionSecs(this);

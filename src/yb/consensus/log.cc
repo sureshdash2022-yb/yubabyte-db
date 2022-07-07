@@ -988,6 +988,10 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
   min_op_idx = std::min(log_copy_min_index_, min_op_idx);
   // Find the prefix of segments in the segment sequence that is guaranteed not to include
   // 'min_op_idx'.
+  LOG(INFO) << "suresh: GetSegmentsToGCUnlocked current min_op_idx: " << min_op_idx
+            << " cdc_min_replicated_index_: "
+            << cdc_min_replicated_index_.load(std::memory_order_acquire);
+
   RETURN_NOT_OK(reader_->GetSegmentPrefixNotIncluding(
       min_op_idx, cdc_min_replicated_index_.load(std::memory_order_acquire), segments_to_gc));
 
@@ -995,16 +999,17 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
       reader_->num_segments() - FLAGS_log_min_segments_to_retain, 0);
   ssize_t segments_to_gc_size = segments_to_gc->size();
   if (segments_to_gc_size > max_to_delete) {
-    VLOG_WITH_PREFIX(2)
-        << "GCing " << segments_to_gc_size << " in " << wal_dir_
+    LOG(INFO)
+        << "suresh: GCing " << segments_to_gc_size << " in " << wal_dir_
         << " would not leave enough remaining segments to satisfy minimum "
         << "retention requirement. Only considering "
         << max_to_delete << "/" << reader_->num_segments();
     segments_to_gc->truncate(max_to_delete);
   } else if (segments_to_gc_size < max_to_delete) {
     auto extra_segments = max_to_delete - segments_to_gc_size;
-    VLOG_WITH_PREFIX(2) << "Too many log segments, need to GC " << extra_segments << " more.";
+    LOG(INFO) << "suresh: Too many log segments, need to GC " << extra_segments << " more.";
   }
+  LOG(INFO) << "suresh: Number of log segments, need to GC: " << segments_to_gc->size();
 
   // Don't GC segments that are newer than the configured time-based retention.
   int64_t now = GetCurrentTimeMicros() + FLAGS_time_based_wal_gc_clock_delta_usec;
@@ -1014,12 +1019,17 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
     // Segments here will always have a footer, since we don't return the in-progress segment up
     // above. However, segments written by older YB builds may not have the timestamp info (TODO:
     // make sure we indeed care about these old builds). In that case, we're allowed to GC them.
-    if (!segment->footer().has_close_timestamp_micros()) continue;
+    if (!segment->footer().has_close_timestamp_micros()) {
+      LOG(INFO) << "suresh: segments need to gc doesnt have has_close_timestamp_micros....";
+      continue;
+    }
 
     int64_t age_seconds = (now - segment->footer().close_timestamp_micros()) / 1000000;
-    if (age_seconds < wal_retention_secs()) {
-      VLOG_WITH_PREFIX(2)
-          << "Segment " << segment->path() << " is only " << age_seconds << "s old: "
+    uint32_t wal_retention = wal_retention_secs();
+    LOG(INFO) << "suresh: WAL retention in seconds: " << wal_retention;
+    if (age_seconds < wal_retention) {
+      LOG(INFO)
+          << "suresh: Segment " << segment->path() << " is only " << age_seconds << "s old: "
           << "cannot GC it yet due to configured time-based retention policy.";
       // Truncate the list of segments to GC here -- if this one is too new, then all later ones are
       // also too new.
@@ -1083,6 +1093,8 @@ void Log::set_wal_retention_secs(uint32_t wal_retention_secs) {
 uint32_t Log::wal_retention_secs() const {
   uint32_t wal_retention_secs = wal_retention_secs_.load(std::memory_order_acquire);
   auto flag_wal_retention = ANNOTATE_UNPROTECTED_READ(FLAGS_log_min_seconds_to_retain);
+  LOG(INFO) << "suresh: wal_retention_secs: " << wal_retention_secs
+            << " flag_wal_retention: " << flag_wal_retention;
   return flag_wal_retention > 0 ?
       std::max(wal_retention_secs, static_cast<uint32_t>(flag_wal_retention)) :
       wal_retention_secs;
@@ -1140,7 +1152,7 @@ yb::OpId Log::WaitForSafeOpIdToApply(const yb::OpId& min_allowed, MonoDelta dura
 Status Log::GC(int64_t min_op_idx, int32_t* num_gced) {
   CHECK_GE(min_op_idx, 0);
 
-  LOG_WITH_PREFIX(INFO) << "Running Log GC on " << wal_dir_ << ": retaining ops >= " << min_op_idx
+  LOG(INFO) << "suresh: Running Log GC on " << wal_dir_ << ": retaining ops >= " << min_op_idx
                         << ", log segment size = " << options_.segment_size_bytes;
   VLOG_TIMING(1, "Log GC") {
     SegmentSequence segments_to_delete;
@@ -1152,21 +1164,23 @@ Status Log::GC(int64_t min_op_idx, int32_t* num_gced) {
       RETURN_NOT_OK(GetSegmentsToGCUnlocked(min_op_idx, &segments_to_delete));
 
       if (segments_to_delete.empty()) {
-        VLOG_WITH_PREFIX(1) << "No segments to delete.";
+        LOG(INFO) << "suresh: No segments to delete.";
         *num_gced = 0;
         return Status::OK();
       }
+      LOG(INFO) << "suresh: before TrimSegmentsUpToAndIncluding call....";
       // Trim the prefix of segments from the reader so that they are no longer referenced by the
       // log.
       const ReadableLogSegmentPtr& last_to_delete = VERIFY_RESULT(segments_to_delete.back());
       RETURN_NOT_OK(
           reader_->TrimSegmentsUpToAndIncluding(last_to_delete->header().sequence_number()));
+      LOG(INFO) << "suresh: before TrimSegmentsUpToAndIncluding call....";
     }
 
     // Now that they are no longer referenced by the Log, delete the files.
     *num_gced = 0;
     for (const scoped_refptr<ReadableLogSegment>& segment : segments_to_delete) {
-      LOG_WITH_PREFIX(INFO) << "Deleting log segment in path: " << segment->path()
+      LOG(INFO) << "suresh: Deleting log segment in path: " << segment->path()
                             << " (GCed ops < " << segment->footer().max_replicate_index() + 1
                             << ")";
       RETURN_NOT_OK(get_env()->DeleteFile(segment->path()));
@@ -1179,6 +1193,7 @@ Status Log::GC(int64_t min_op_idx, int32_t* num_gced) {
 
     // Determine the minimum remaining replicate index in order to properly GC the index chunks.
     int64_t min_remaining_op_idx = reader_->GetMinReplicateIndex();
+    LOG(INFO) << "suresh: min_remaining_op_idx: " << min_remaining_op_idx;
     if (min_remaining_op_idx > 0) {
       log_index_->GC(min_remaining_op_idx);
     }

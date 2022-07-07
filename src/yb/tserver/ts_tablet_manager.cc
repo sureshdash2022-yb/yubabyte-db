@@ -466,8 +466,14 @@ Status TSTabletManager::Init() {
   MonoTime start(MonoTime::Now());
   for (const string& tablet_id : tablet_ids) {
     RaftGroupMetadataPtr meta;
-    RETURN_NOT_OK_PREPEND(OpenTabletMeta(tablet_id, &meta),
-                          "Failed to open tablet metadata for tablet: " + tablet_id);
+    RETURN_NOT_OK_PREPEND(
+        OpenTabletMeta(tablet_id, &meta),
+        "Failed to open tablet metadata for tablet: " + tablet_id);
+    LOG(INFO) << "suresh: tablet_id: " << tablet_id << " meta->table_id(): " << meta->table_id()
+              << " meta->raft_group_id(): " << meta->raft_group_id()
+              << " meta->data_root_dir(): " << meta->data_root_dir() << "meta->wal_retention_secs()"
+              << meta->wal_retention_secs() << " meta->cdc_min_replicated_index(): "
+              << meta->cdc_min_replicated_index();
     if (PREDICT_FALSE(!CanServeTabletData(meta->tablet_data_state()))) {
       RETURN_NOT_OK(HandleNonReadyTabletOnStartup(meta));
       continue;

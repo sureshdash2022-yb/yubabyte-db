@@ -751,6 +751,7 @@ Status TabletPeer::RunLogGC() {
   if (!s.ok()) {
     LOG_WITH_PREFIX(WARNING) << "Unable to reset cdc min replicated index " << s;
   }
+  LOG(INFO) << "suresh: Inside TabletPeer::RunLogGC.........";
   int64_t min_log_index;
   if (VLOG_IS_ON(2)) {
     std::string details;
@@ -760,6 +761,7 @@ Status TabletPeer::RunLogGC() {
      min_log_index = VERIFY_RESULT(GetEarliestNeededLogIndex());
   }
   int32_t num_gced = 0;
+  LOG(INFO) << "suresh: min_log_index neeed to GC: " << min_log_index;
   return log_->GC(min_log_index, &num_gced);
 }
 
@@ -861,6 +863,7 @@ Result<int64_t> TabletPeer::GetEarliestNeededLogIndex(std::string* details) cons
   // segments before we check the anchors.
   auto latest_log_entry_op_id = log_->GetLatestEntryOpId();
   int64_t min_index = latest_log_entry_op_id.index;
+  LOG(INFO) << "suresh: min_index as latest_log_entry_op_id.index: " << min_index;
   if (details) {
     *details += Format("Latest log entry op id: $0\n", latest_log_entry_op_id);
   }
@@ -878,6 +881,8 @@ Result<int64_t> TabletPeer::GetEarliestNeededLogIndex(std::string* details) cons
     if (PREDICT_FALSE(!s.ok())) {
       DCHECK(s.IsNotFound()) << "Unexpected error calling LogAnchorRegistry: " << s.ToString();
     } else {
+      LOG(INFO) << "suresh: current min_index: " << min_index
+                << " checked with anchor index : " << min_anchor_index;
       min_index = std::min(min_index, min_anchor_index);
       if (details) {
         *details += Format("Min anchor index: $0\n", min_anchor_index);
@@ -895,13 +900,17 @@ Result<int64_t> TabletPeer::GetEarliestNeededLogIndex(std::string* details) cons
       min_pending_op_index = std::min(min_pending_op_index, tx_op_id.index);
     }
   }
-
+  LOG(INFO) << "suresh: current min_index: " << min_index
+            << " checked with min_pending_op_index : " << min_pending_op_index;
   min_index = std::min(min_index, min_pending_op_index);
   if (details && min_pending_op_index != std::numeric_limits<int64_t>::max()) {
     *details += Format("Min pending op id index: $0\n", min_pending_op_index);
   }
 
   auto min_retryable_request_op_id = consensus_->MinRetryableRequestOpId();
+  LOG(INFO) << "suresh: current min_index: " << min_index
+            << " checked with min_retryable_request_op_id.index : "
+            << min_retryable_request_op_id.index;
   min_index = std::min(min_index, min_retryable_request_op_id.index);
   if (details) {
     *details += Format("Min retryable request op id: $0\n", min_retryable_request_op_id);
@@ -910,6 +919,9 @@ Result<int64_t> TabletPeer::GetEarliestNeededLogIndex(std::string* details) cons
   auto* transaction_coordinator = tablet()->transaction_coordinator();
   if (transaction_coordinator) {
     auto transaction_coordinator_min_op_index = transaction_coordinator->PrepareGC(details);
+    LOG(INFO) << "suresh: current min_index: " << min_index
+              << " checked with transaction_coordinator_min_op_index : "
+              << transaction_coordinator_min_op_index;
     min_index = std::min(min_index, transaction_coordinator_min_op_index);
   }
 
@@ -933,6 +945,8 @@ Result<int64_t> TabletPeer::GetEarliestNeededLogIndex(std::string* details) cons
   // - We still don't garbage-collect the logs containing the committed but unflushed data,
   //   because the earlier value of the last committed op id that we read prevents us from doing so.
   auto last_committed_op_id = consensus()->GetLastCommittedOpId();
+  LOG(INFO) << "suresh: current min_index: " << min_index
+            << " checked with last_committed_op_id.index: " << last_committed_op_id.index;
   min_index = std::min(min_index, last_committed_op_id.index);
   if (details) {
     *details += Format("Last committed op id: $0\n", last_committed_op_id);
@@ -943,12 +957,18 @@ Result<int64_t> TabletPeer::GetEarliestNeededLogIndex(std::string* details) cons
     auto max_persistent_op_id = VERIFY_RESULT(
         tablet_->MaxPersistentOpId(true /* invalid_if_no_new_data */));
     if (max_persistent_op_id.regular.valid()) {
+      LOG(INFO) << "suresh: current min_index: " << min_index
+                << " checked with max_persistent_op_id.regular.index: "
+                << max_persistent_op_id.regular.index;
       min_index = std::min(min_index, max_persistent_op_id.regular.index);
       if (details) {
         *details += Format("Max persistent regular op id: $0\n", max_persistent_op_id.regular);
       }
     }
     if (max_persistent_op_id.intents.valid()) {
+      LOG(INFO) << "suresh: current min_index: " << min_index
+                << " checked with max_persistent_op_id.intents.index: "
+                << max_persistent_op_id.intents.index;
       min_index = std::min(min_index, max_persistent_op_id.intents.index);
       if (details) {
         *details += Format("Max persistent intents op id: $0\n", max_persistent_op_id.intents);
@@ -992,6 +1012,7 @@ Status TabletPeer::set_cdc_min_replicated_index_unlocked(int64_t cdc_min_replica
     log->set_cdc_min_replicated_index(cdc_min_replicated_index);
   }
   cdc_min_replicated_index_refresh_time_ = MonoTime::Now();
+  LOG(INFO) << "suresh: new cdc min replicated index to: " << log->cdc_min_replicated_index();
   return Status::OK();
 }
 
@@ -1004,9 +1025,11 @@ Status TabletPeer::reset_cdc_min_replicated_index_if_stale() {
   std::lock_guard<decltype(cdc_min_replicated_index_lock_)> l(cdc_min_replicated_index_lock_);
   auto seconds_since_last_refresh =
       MonoTime::Now().GetDeltaSince(cdc_min_replicated_index_refresh_time_).ToSeconds();
-  if (seconds_since_last_refresh > FLAGS_cdc_min_replicated_index_considered_stale_secs) {
-    LOG_WITH_PREFIX(INFO) << "Resetting cdc min replicated index. Seconds since last update: "
+  // if (seconds_since_last_refresh > FLAGS_cdc_min_replicated_index_considered_stale_secs) {
+  {
+    LOG(INFO) << "suresh: Resetting cdc min replicated index. Seconds since last update: "
                           << seconds_since_last_refresh;
+
     RETURN_NOT_OK(set_cdc_min_replicated_index_unlocked(std::numeric_limits<int64_t>::max()));
   }
   return Status::OK();

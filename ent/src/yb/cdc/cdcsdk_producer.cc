@@ -592,7 +592,7 @@ Status GetChangesForCDCSDK(
     int64_t* last_readable_opid_index,
     const CoarseTimePoint deadline) {
   OpId op_id{from_op_id.term(), from_op_id.index()};
-  VLOG(1) << "The from_op_id from GetChanges is  " << op_id;
+  LOG(INFO) << "suresh: The from_op_id from GetChanges is  " << op_id;
   ScopedTrackedConsumption consumption;
   CDCSDKProtoRecordPB* proto_record = nullptr;
   RowMessage* row_message = nullptr;
@@ -763,6 +763,7 @@ Status GetChangesForCDCSDK(
           case consensus::OperationType::UPDATE_TRANSACTION_OP:
             // Ignore intents.
             // Read from IntentDB after they have been applied.
+            LOG(INFO) << "suresh: reading the WAL record for op_id: " << last_seen_op_id;
             if (msg->transaction_state().status() == TransactionStatus::APPLYING) {
               auto txn_id = VERIFY_RESULT(
                   FullyDecodeTransactionId(msg->transaction_state().transaction_id()));
@@ -850,9 +851,10 @@ Status GetChangesForCDCSDK(
             nullptr, std::move(read_ops.messages), std::move(consumption));
       }
 
-      if (!checkpoint_updated) {
+      // if (!checkpoint_updated)
+      {
         LOG_WITH_FUNC(INFO)
-            << "The last batch of 'read_ops' had no actionable message. last_see_op_id: "
+            << "suresh: The last batch of 'read_ops' had no actionable message. last_see_op_id: "
             << last_seen_op_id << ", last_readable_opid_index: " << *last_readable_opid_index
             << ". Will retry and get another batch";
       }

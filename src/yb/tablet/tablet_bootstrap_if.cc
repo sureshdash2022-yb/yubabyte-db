@@ -107,7 +107,7 @@ Status BootstrapTablet(
   const auto& meta = *data.tablet_init_data.metadata;
   TRACE_EVENT1("tablet", "BootstrapTablet", "tablet_id", meta.raft_group_id());
   RETURN_NOT_OK(BootstrapTabletImpl(data, rebuilt_tablet, rebuilt_log, consensus_info));
-
+  LOG(INFO) << "suresh: inside BootstrapTablet read from metadata: " << meta.wal_retention_secs();
   // Set WAL retention time from the metadata.
   (*rebuilt_log)->set_wal_retention_secs(meta.wal_retention_secs());
   (*rebuilt_log)->set_cdc_min_replicated_index(meta.cdc_min_replicated_index());

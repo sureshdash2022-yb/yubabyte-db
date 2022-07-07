@@ -304,6 +304,8 @@ Status LogReader::GetSegmentPrefixNotIncluding(int64_t index, int64_t cdc_max_re
 
     // Never garbage collect log segments with unflushed entries.
     if (segment->footer().max_replicate_index() >= index) {
+      LOG(INFO) << "suresh: segment->footer().max_replicate_index()"
+                << segment->footer().max_replicate_index() << " current idx: " << index << "dont delete segment.";
       break;
     }
 
@@ -312,10 +314,14 @@ Status LogReader::GetSegmentPrefixNotIncluding(int64_t index, int64_t cdc_max_re
     // logs (controlled by flag FLAGS_log_stop_retaining_min_disk_mb).
     if (FLAGS_enable_log_retention_by_op_idx &&
         segment->footer().max_replicate_index() >= cdc_max_replicated_index) {
-
-      // Since this log file contains cdc unreplicated entries, we don't want to GC it unless
-      // it's too old, or we don't have enough space to store log files.
-      if (!ViolatesMaxTimePolicy(segment) && !ViolatesMinSpacePolicy(segment, &reclaimed_space)) {
+      LOG(INFO) << "suresh: segment->footer().max_replicate_index(): "
+                << segment->footer().max_replicate_index()
+                << " greater than cdc_max_replicated_index: "
+                << cdc_max_replicated_index << " don't remove it.";
+          // Since this log file contains cdc unreplicated entries, we don't want to GC it
+          // unless it's too old, or we don't have enough space to store log files.
+          if (!ViolatesMaxTimePolicy(segment) &&
+              !ViolatesMinSpacePolicy(segment, &reclaimed_space)) {
         // We exit the loop since this log segment already contains cdc unreplicated entries and so
         // do all subsequent files.
         break;

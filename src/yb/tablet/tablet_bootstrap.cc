@@ -1477,8 +1477,10 @@ class TabletBootstrap {
     }
 
     if (request->has_wal_retention_secs()) {
-      RETURN_NOT_OK_PREPEND(tablet_->AlterWalRetentionSecs(&operation),
-                            "Failed to alter wal retention secs");
+      RETURN_NOT_OK_PREPEND(
+          tablet_->AlterWalRetentionSecs(&operation), "Failed to alter wal retention secs");
+      LOG(INFO) << "suresh: In PlayChangeMetadataRequest request->wal_retention_secs(): "
+                << request->wal_retention_secs();
       log_->set_wal_retention_secs(request->wal_retention_secs());
     }
 

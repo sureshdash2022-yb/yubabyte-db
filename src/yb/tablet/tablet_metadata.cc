@@ -180,6 +180,7 @@ Status TableInfo::LoadFromPB(const TableId& primary_table_id, const TableInfoPB&
   namespace_name = pb.namespace_name();
   table_name = pb.table_name();
   table_type = pb.table_type();
+  wal_retention_secs = pb.wal_retention_secs();
   cotable_id = VERIFY_RESULT(ParseCotableId(Primary(primary_table_id == table_id), table_id));
 
   RETURN_NOT_OK(doc_read_context->LoadFromPB(pb));
@@ -205,6 +206,7 @@ void TableInfo::ToPB(TableInfoPB* pb) const {
   pb->set_namespace_name(namespace_name);
   pb->set_table_name(table_name);
   pb->set_table_type(table_type);
+  pb->set_wal_retention_secs(wal_retention_secs);
 
   doc_read_context->ToPB(schema_version, pb);
   if (index_info) {
@@ -256,6 +258,9 @@ Status KvStoreInfo::LoadTablesFromPB(
   for (const auto& table_pb : pbs) {
     auto table_info = std::make_shared<TableInfo>();
     RETURN_NOT_OK(table_info->LoadFromPB(primary_table_id, table_pb));
+    LOG(INFO) << "suresh: Reading the table_id: " << table_info->table_id
+              << " seraching primary_table_id:  " << primary_table_id
+              << " metadata wal_retention_secs: " << table_info->wal_retention_secs;
     if (table_info->table_id != primary_table_id) {
       // TODO(alex): cotable_id should be loaded from PB schema, do we need this section?
       if (table_pb.schema().table_properties().is_ysql_catalog_table()) {
@@ -595,7 +600,7 @@ Status RaftGroupMetadata::LoadFromSuperBlock(const RaftGroupReplicaSuperBlockPB&
     return Flush();
   }
 
-  VLOG(2) << "Loading RaftGroupMetadata from SuperBlockPB:" << std::endl
+  LOG(INFO) << "Loading RaftGroupMetadata from SuperBlockPB:" << std::endl
           << superblock.DebugString();
 
   {
@@ -613,6 +618,7 @@ Status RaftGroupMetadata::LoadFromSuperBlock(const RaftGroupReplicaSuperBlockPB&
     primary_table_id_ = superblock.primary_table_id();
     colocated_ = superblock.colocated();
 
+    LOG(INFO) << "suresh: load kv_store_ for primary_table_id_: " << primary_table_id_;
     RETURN_NOT_OK(kv_store_.LoadFromPB(superblock.kv_store(),
                                        primary_table_id_,
                                        local_superblock));
@@ -698,6 +704,7 @@ Status RaftGroupMetadata::SaveToDiskUnlocked(const RaftGroupReplicaSuperBlockPB 
 
 Status RaftGroupMetadata::ReadSuperBlockFromDisk(RaftGroupReplicaSuperBlockPB* superblock) const {
   string path = VERIFY_RESULT(fs_manager_->GetRaftGroupMetadataPath(raft_group_id_));
+  LOG(INFO) << "suresh: raft_group_id_: " << raft_group_id_ << " superblock path: " << path;
   RETURN_NOT_OK_PREPEND(
       pb_util::ReadPBContainerFromPath(fs_manager_->env(), path, superblock),
       Substitute("Could not load Raft group metadata from $0", path));
@@ -939,13 +946,14 @@ void RaftGroupMetadata::set_wal_retention_secs(uint32 wal_retention_secs) {
   std::lock_guard<MutexType> lock(data_mutex_);
   auto it = kv_store_.tables.find(primary_table_id_);
   if (it == kv_store_.tables.end()) {
-    LOG_WITH_PREFIX(DFATAL) << "Unable to set WAL retention time for primary table "
+    LOG(INFO) << "suresh: Unable to set WAL retention time for primary table "
                             << primary_table_id_;
     return;
   }
   it->second->wal_retention_secs = wal_retention_secs;
-  LOG_WITH_PREFIX(INFO) << "Set RaftGroupMetadata wal retention time to "
-                        << wal_retention_secs << " seconds";
+  LOG(INFO) << "suresh: Set RaftGroupMetadata wal retention time to " << wal_retention_secs
+            << " seconds"
+            << " primary_table_id_: " << primary_table_id_;
 }
 
 uint32_t RaftGroupMetadata::wal_retention_secs() const {
