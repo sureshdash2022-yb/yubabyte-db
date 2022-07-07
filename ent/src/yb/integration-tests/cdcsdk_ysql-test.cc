@@ -2669,12 +2669,11 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestXClusterLogGCedWithTabletBoot
   change_req.mutable_from_checkpoint()->mutable_op_id()->set_index(0);
   change_req.mutable_from_checkpoint()->mutable_op_id()->set_term(0);
   change_req.set_serve_as_proxy(true);
-  rpc.set_timeout(MonoDelta::FromSeconds(10.0) * kTimeMultiplier);
+  rpc.set_timeout(MonoDelta::FromSeconds(kRpcTimeout));
   ASSERT_OK(cdc_proxy_->GetChanges(change_req, &change_resp_1, &rpc));
   ASSERT_FALSE(change_resp_1.has_error());
 
   ASSERT_OK(WriteRows(100 /* start */, 200 /* end */, &test_cluster_));
-  // SleepFor(MonoDelta::FromSeconds(FLAGS_cdc_min_replicated_index_considered_stale_secs * 2));
   ASSERT_OK(test_client()->FlushTables(
       {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 100,
       /* is_compaction = */ false));
@@ -2707,7 +2706,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestXClusterLogGCedWithTabletBoot
   change_req.mutable_from_checkpoint()->mutable_op_id()->set_term(
       change_resp_1.checkpoint().op_id().term());
   change_req.set_serve_as_proxy(true);
-  rpc.set_timeout(MonoDelta::FromSeconds(10.0) * kTimeMultiplier);
+  rpc.set_timeout(MonoDelta::FromSeconds(kRpcTimeout));
 
   ASSERT_OK(cdc_proxy_->GetChanges(change_req, &change_resp_2, &rpc));
   ASSERT_FALSE(change_resp_2.has_error());
