@@ -2623,7 +2623,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestLogGCedWithTabletBootStrap)) 
         // WAL logs, even if CDCSDK no consumed those Logs.
         FLAGS_cdc_min_replicated_index_considered_stale_secs = 1;
         ASSERT_OK(tablet_peer->RunLogGC());
-        tablet_peer->log()
       }
     }
   }
