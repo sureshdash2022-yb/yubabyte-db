@@ -199,7 +199,8 @@ Result<size_t> PopulatePackedRows(
     }
     const ColumnSchema& col = VERIFY_RESULT(schema.column_by_id(column_data.id));
 
-    AddColumnToMap(tablet_peer, col, pv, enum_oid_label_map, row_message->add_new_tuple());
+    // TODO: Need to add the error code.
+    auto result = AddColumnToMap(tablet_peer, col, pv, enum_oid_label_map, row_message->add_new_tuple());
     row_message->add_old_tuple();
   }
 
@@ -300,13 +301,6 @@ Status PopulateCDCSDKIntentRecord(
             row_message));
       } else {
         ++col_count;
-
-        auto result = AddColumnToMap(
-            tablet_peer, col, decoded_value.primitive_value(), enum_oid_label_map,
-            row_message->add_new_tuple());
-        if (!result.ok()) {
-          return result;
-        }
         row_message->add_old_tuple();
         docdb::Value decoded_value;
         RETURN_NOT_OK(decoded_value.Decode(intent.value_buf));
@@ -315,9 +309,12 @@ Status PopulateCDCSDKIntentRecord(
           const ColumnSchema& col =
               VERIFY_RESULT(schema.column_by_id(column_id_opt->GetColumnId()));
 
-          AddColumnToMap(
+          auto result = AddColumnToMap(
               tablet_peer, col, decoded_value.primitive_value(), enum_oid_label_map,
               row_message->add_new_tuple());
+          if (!result.ok()) {
+            return result;
+          }
           row_message->add_old_tuple();
 
         } else if (column_id_opt && column_id_opt->type() != docdb::KeyEntryType::kSystemColumnId) {
@@ -423,20 +420,15 @@ Status PopulateCDCSDKWriteRecord(
         RETURN_NOT_OK(docdb::KeyEntryValue::DecodeKey(&key_column, &column_id));
         if (column_id.type() == docdb::KeyEntryType::kColumnId) {
           const ColumnSchema& col = VERIFY_RESULT(schema.column_by_id(column_id.GetColumnId()));
-
-        auto result = AddColumnToMap(
-            tablet_peer, col, decoded_value.primitive_value(), enum_oid_label_map,
-            row_message->add_new_tuple());
-        if (!result.ok()) {
-          return result;
-        }
-        row_message->add_old_tuple();
           docdb::Value decoded_value;
           RETURN_NOT_OK(decoded_value.Decode(write_pair.value()));
 
-          AddColumnToMap(
+          auto result = AddColumnToMap(
               tablet_peer, col, decoded_value.primitive_value(), enum_oid_label_map,
               row_message->add_new_tuple());
+          if (!result.ok()) {
+            return result;
+          }
           row_message->add_old_tuple();
 
         } else if (column_id.type() != docdb::KeyEntryType::kSystemColumnId) {
