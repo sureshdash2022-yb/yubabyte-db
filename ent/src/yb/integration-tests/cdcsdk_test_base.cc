@@ -241,7 +241,8 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
       "CREATE TABLE $0.$1($2 int $3, $4 $5) WITH ($6colocated = $7) "
       "SPLIT INTO $8 TABLETS",
       schema_name, table_name + enum_suffix, kKeyColumnName, (add_primary_key) ? "PRIMARY KEY" : "",
-      kValueColumnName, enum_value ? (schema_name + "." + "coupon_discount_type" + enum_suffix) : "int",
+      kValueColumnName,
+      enum_value ? (schema_name + "." + "coupon_discount_type" + enum_suffix) : "int",
       table_oid_string, colocated, num_tablets));
   return GetTable(cluster, namespace_name, table_name + enum_suffix);
 }

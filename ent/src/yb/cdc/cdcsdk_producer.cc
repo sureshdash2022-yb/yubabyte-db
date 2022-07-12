@@ -105,7 +105,8 @@ Status AddPrimaryKey(
   for (const auto& col : decoded_key.doc_key().hashed_group()) {
     DatumMessagePB* tuple = AddTuple(row_message);
 
-    auto result = AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple);
+    auto result =
+        AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple);
     if (!result.ok()) {
       return result;
     }
@@ -200,7 +201,8 @@ Result<size_t> PopulatePackedRows(
     const ColumnSchema& col = VERIFY_RESULT(schema.column_by_id(column_data.id));
 
     // TODO: Need to add the error code.
-    auto result = AddColumnToMap(tablet_peer, col, pv, enum_oid_label_map, row_message->add_new_tuple());
+    auto result =
+        AddColumnToMap(tablet_peer, col, pv, enum_oid_label_map, row_message->add_new_tuple());
     row_message->add_old_tuple();
   }
 
@@ -399,7 +401,8 @@ Status PopulateCDCSDKWriteRecord(
         }
       }
 
-      auto result = AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message);
+      auto result =
+          AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message);
       if (!result.ok()) {
         return result;
       }

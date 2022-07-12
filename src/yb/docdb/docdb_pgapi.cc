@@ -1814,7 +1814,6 @@ Status SetValueFromQLBinaryHelper(
       cdc_datum_message->set_datum_string("");
       break;
   }
-
   return Status::OK();
 }
 

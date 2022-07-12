@@ -286,7 +286,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   Status WriteEnumsRows(
       uint32_t start, uint32_t end, Cluster* cluster, const string& enum_suffix = "",
-      string database_name = kNamespaceName, string table_name = kTableName, string schema_name = "public") {
+      string database_name = kNamespaceName, string table_name = kTableName,
+      string schema_name = "public") {
     auto conn = VERIFY_RESULT(cluster->ConnectToDB(database_name));
     LOG(INFO) << "Writing " << end - start << " row(s) within transaction";
 
@@ -416,7 +417,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     SetCDCCheckpointResponsePB set_checkpoint_resp;
     auto deadline = CoarseMonoClock::now() + test_client()->default_rpc_timeout();
     set_checkpoint_rpc.set_deadline(deadline);
-    PrepareSetCheckpointRequest(&set_checkpoint_req, stream_id, tablets, idx, op_id, initial_checkpoint);
+    PrepareSetCheckpointRequest(
+        &set_checkpoint_req, stream_id, tablets, idx, op_id, initial_checkpoint);
     Status st =
         cdc_proxy_->SetCDCCheckpoint(set_checkpoint_req, &set_checkpoint_resp, &set_checkpoint_rpc);
 
