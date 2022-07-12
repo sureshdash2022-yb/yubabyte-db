@@ -283,15 +283,17 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   }
 
   Status WriteEnumsRows(
-      uint32_t start, uint32_t end, Cluster* cluster, const string& enum_suffix = "") {
-    auto conn = VERIFY_RESULT(cluster->ConnectToDB(kNamespaceName));
+      uint32_t start, uint32_t end, Cluster* cluster, const string& enum_suffix = "",
+      string database_name = kNamespaceName, string table_name = kTableName, string schema_name = "public") {
+    auto conn = VERIFY_RESULT(cluster->ConnectToDB(database_name));
     LOG(INFO) << "Writing " << end - start << " row(s) within transaction";
 
     RETURN_NOT_OK(conn.Execute("BEGIN"));
     for (uint32_t i = start; i < end; ++i) {
       RETURN_NOT_OK(conn.ExecuteFormat(
-          "INSERT INTO $0($1, $2) VALUES ($3, '$4')", kTableName + enum_suffix, kKeyColumnName,
-          kValueColumnName, i, std::string(i % 2 ? "FIXED" : "PERCENTAGE") + enum_suffix));
+          "INSERT INTO $0.$1($2, $3) VALUES ($4, '$5')", schema_name, table_name + enum_suffix,
+          kKeyColumnName, kValueColumnName, i,
+          std::string(i % 2 ? "FIXED" : "PERCENTAGE") + enum_suffix));
     }
     RETURN_NOT_OK(conn.Execute("COMMIT"));
     return Status::OK();
@@ -2581,8 +2583,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumWithMultipleTablets)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
   ASSERT_OK(SetUpWithParams(3, 1, false));
+  const uint32_t num_tablets = 3;
 
-  const uint32_t num_tablets = 4;
   auto table = ASSERT_RESULT(
       CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, true));
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
@@ -2593,54 +2595,63 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumWithMultipleTablets)) {
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
 
   for (uint32_t idx = 0; idx < num_tablets; idx++) {
-    auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets, OpId::Min(), true, idx));
-    ASSERT_FALSE(resp.has_error());
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets, OpId::Min(), true, idx));
+  ASSERT_FALSE(resp.has_error());
   }
 
-    int insert_count = 100;
-    // Insert some records in transaction.
-    ASSERT_OK(WriteEnumsRows(0, insert_count, &test_cluster_));
-    ASSERT_OK(test_client()->FlushTables(
-        {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
-        /* is_compaction = */ false));
+  ASSERT_OK(WriteEnumsRows(0, 100, &test_cluster_));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
 
-    // Restart of the tsever will make Tablet Bootstrap.
-    test_cluster()->mini_tablet_server(0)->Shutdown();
-    ASSERT_OK(test_cluster()->mini_tablet_server(0)->Start());
-    ASSERT_OK(test_cluster()->mini_tablet_server(0)->WaitStarted());
+  int total_count = 0;
+  for (uint32_t idx = 0; idx < num_tablets; idx++) {
+  GetChangesResponsePB change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, nullptr, idx));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  for (uint32_t i = 0; i < record_size; ++i) {
+    if (change_resp.cdc_sdk_proto_records(i).row_message().op() == RowMessage::INSERT) {
+      const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(i);
+      total_count += 1;
+    }
+  }
+  }
+  LOG(INFO) << "Total GetChanges record counts: " << total_count;
+  ASSERT_EQ(total_count, 100);
 
-    int total_count= 0;
-    for (uint32_t idx = 0; idx < num_tablets; idx++) {
-      // Call get changes.
-      GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, nullptr, idx));
-      uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
-      for (uint32_t i = 0; i < record_size; ++i) {
-        if (change_resp.cdc_sdk_proto_records(i).row_message().op() == RowMessage::INSERT) {
-          const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(i);
-          LOG(INFO) << "suresh:  key: " << record.row_message().new_tuple(0).datum_int32()
-                    << " value is: " << record.row_message().new_tuple(1).datum_string();
-          // ASSERT_GT(record_size, insert_count);
-          total_count += 1;
-        }
+  auto table_02 = ASSERT_RESULT(CreateTable(
+      &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, true, "_02"));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets_02;
+  ASSERT_OK(test_client()->GetTablets(table_02, 0, &tablets_02, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets_02.size(), num_tablets);
+
+  std::string table_id_02 =
+      ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kSecondTableName));
+  CDCStreamId stream_id_02 = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  for (uint32_t idx = 0; idx < num_tablets; idx++) {
+    auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id_02, tablets_02, OpId::Min(), true, idx));
+    ASSERT_FALSE(resp.has_error());
+  }
+  ASSERT_OK(WriteEnumsRows(0, 100, &test_cluster_, "_02", kNamespaceName,kTableName));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  total_count = 0;
+  for (uint32_t idx = 0; idx < num_tablets; idx++) {
+    GetChangesResponsePB change_resp =
+        ASSERT_RESULT(GetChangesFromCDC(stream_id_02, tablets_02, nullptr, idx));
+    uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+    for (uint32_t i = 0; i < record_size; ++i) {
+      if (change_resp.cdc_sdk_proto_records(i).row_message().op() == RowMessage::INSERT) {
+        const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(i);
+        total_count += 1;
       }
     }
-    ASSERT_EQ(insert_count, total_count);
-#if 0
-      int expected_key_value = 0;
-      for (uint32_t i = 0; i < record_size; ++i) {
-        if (change_resp.cdc_sdk_proto_records(i).row_message().op() == RowMessage::INSERT) {
-          const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(i);
-          ASSERT_EQ(expected_key_value, record.row_message().new_tuple(0).datum_int32());
-          ASSERT_EQ(
-              expected_key_value % 2 ? "FIXED" : "PERCENTAGE",
-              record.row_message().new_tuple(1).datum_string());
-          expected_key_value++;
-        }
-      }
-
-      ASSERT_EQ(insert_count, expected_key_value);
-#endif
-      }
+  }
+  ASSERT_EQ(total_count, 100);
+}
 
 }  // namespace enterprise
 }  // namespace cdc

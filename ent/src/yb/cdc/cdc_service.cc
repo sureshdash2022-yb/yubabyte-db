@@ -854,6 +854,13 @@ Status CDCServiceImpl::UpdateEnumMapInCacheUnlocked(const NamespaceName& ns_name
   return Status::OK();
 }
 
+void CDCServiceImpl::EraseEnumMapFromCache(const NamespaceName& ns_name) {
+  std::lock_guard<decltype(mutex_)> l(mutex_);
+  if (enumlabel_cache_.find(ns_name) != enumlabel_cache_.end()) {
+    enumlabel_cache_.erase(ns_name);
+  }
+}
+
 Status CDCServiceImpl::CreateCDCStreamForNamespace(
     const CreateCDCStreamRequestPB* req,
     CreateCDCStreamResponsePB* resp,
@@ -1333,7 +1340,6 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     auto namespace_name = tablet_peer->tablet()->metadata()->namespace_name();
 
     auto enum_map_result = GetEnumMapFromCache(namespace_name);
-
     if (!enum_map_result.ok()) {
       RPC_STATUS_RETURN_ERROR(
           enum_map_result.status(), resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
@@ -1343,6 +1349,20 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
         req->stream_id(), req->tablet_id(), cdc_sdk_op_id, record, tablet_peer, mem_tracker,
         *enum_map_result, &msgs_holder, resp, &commit_timestamp, &cached_schema,
         &last_streamed_op_id, &last_readable_index, get_changes_deadline);
+    // This specific error from the docdb_pgapi layer, to identify enum cache entry is out of date,
+    // required to repopulate.
+    if (s.IsIOError()) {
+      EraseEnumMapFromCache(namespace_name);
+      enum_map_result = UpdateCacheAndGetEnumMap(namespace_name);
+      if (!enum_map_result.ok()) {
+        RPC_STATUS_RETURN_ERROR(
+            enum_map_result.status(), resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
+      }
+      s = cdc::GetChangesForCDCSDK(
+          req->stream_id(), req->tablet_id(), cdc_sdk_op_id, record, tablet_peer, mem_tracker,
+          *enum_map_result, &msgs_holder, resp, &commit_timestamp, &cached_schema,
+          &last_streamed_op_id, &last_readable_index, get_changes_deadline);
+    }
 
     impl_->UpdateCDCStateMetadata(
         producer_tablet, commit_timestamp, cached_schema, last_streamed_op_id);

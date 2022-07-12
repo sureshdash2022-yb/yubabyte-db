@@ -345,6 +345,9 @@ class CDCServiceImpl : public CDCServiceIf {
   // Update enum map in cache.
   Status UpdateEnumMapInCacheUnlocked(const NamespaceName& ns_name) REQUIRES(mutex_);
 
+  // Erase enum map from cache.
+  void EraseEnumMapFromCache(const NamespaceName& ns_name);
+
   rpc::Rpcs rpcs_;
 
   tserver::TSTabletManager* tablet_manager_;

@@ -51,6 +51,7 @@ constexpr int kRpcTimeout = NonTsanVsTsan(60, 120);
 static const std::string kUniverseId = "test_universe";
 static const std::string kNamespaceName = "test_namespace";
 constexpr static const char* const kTableName = "test_table";
+constexpr static const char* const kSecondTableName = "test_table_02";
 constexpr static const char* const kKeyColumnName = "key";
 constexpr static const char* const kValueColumnName = "value";
 
@@ -139,7 +140,8 @@ class CDCSDKTestBase : public YBTest {
       bool colocated = false,
       const int table_oid = 0,
       bool enum_value = false,
-      const std::string& enum_suffix = "");
+      const std::string& enum_suffix = "",
+      const std::string& schema_name = "public");
 
   Result<std::string> GetNamespaceId(const std::string& namespace_name);
 

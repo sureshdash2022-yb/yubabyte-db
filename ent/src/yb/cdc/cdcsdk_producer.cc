@@ -59,7 +59,7 @@ void SetOperation(RowMessage* row_message, OpType type, const Schema& schema) {
 }
 
 template <class Value>
-void AddColumnToMap(
+Status AddColumnToMap(
     const std::shared_ptr<tablet::TabletPeer>& tablet_peer,
     const ColumnSchema& col_schema,
     const Value& col,
@@ -70,12 +70,14 @@ void AddColumnToMap(
   if (tablet_peer->tablet()->table_type() == PGSQL_TABLE_TYPE) {
     col.ToQLValuePB(col_schema.type(), &ql_value);
     if (!IsNull(ql_value) && col_schema.pg_type_oid() != 0 /*kInvalidOid*/) {
-      docdb::SetValueFromQLBinaryWrapper(
+      auto result = docdb::SetValueFromQLBinaryWrapper(
           ql_value, col_schema.pg_type_oid(), enum_oid_label_map, cdc_datum_message);
+        return result;
     } else {
       cdc_datum_message->set_column_type(col_schema.pg_type_oid());
     }
   }
+  return Status::OK();
 }
 
 DatumMessagePB* AddTuple(RowMessage* row_message) {
@@ -94,7 +96,7 @@ DatumMessagePB* AddTuple(RowMessage* row_message) {
   return tuple;
 }
 
-void AddPrimaryKey(
+Status AddPrimaryKey(
     const std::shared_ptr<tablet::TabletPeer>& tablet_peer, const docdb::SubDocKey& decoded_key,
     const Schema& tablet_schema, const EnumOidLabelMap& enum_oid_label_map,
     RowMessage* row_message) {
@@ -102,16 +104,24 @@ void AddPrimaryKey(
   for (const auto& col : decoded_key.doc_key().hashed_group()) {
     DatumMessagePB* tuple = AddTuple(row_message);
 
-    AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple);
+    auto result = AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple);
+    if (!result.ok()) {
+      return result;
+    }
     i++;
   }
 
   for (const auto& col : decoded_key.doc_key().range_group()) {
     DatumMessagePB* tuple = AddTuple(row_message);
 
-    AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple);
+    auto result =
+        AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple);
+    if (!result.ok()) {
+      return result;
+    }
     i++;
   }
+  return Status::OK();
 }
 
 void SetCDCSDKOpId(
@@ -247,7 +257,11 @@ Status PopulateCDCSDKIntentRecord(
 
       // Write pair contains record for different row. Create a new CDCRecord in this case.
       row_message->set_transaction_id(transaction_id.ToString());
-      AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message);
+      auto result =
+          AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message);
+      if (!result.ok()) {
+        return result;
+      }
     }
 
     if (IsInsertOperation(*row_message)) {
@@ -259,9 +273,12 @@ Status PopulateCDCSDKIntentRecord(
       if (column_id_opt && column_id_opt->type() == docdb::KeyEntryType::kColumnId) {
         const ColumnSchema& col = VERIFY_RESULT(schema.column_by_id(column_id_opt->GetColumnId()));
 
-        AddColumnToMap(
+        auto result = AddColumnToMap(
             tablet_peer, col, decoded_value.primitive_value(), enum_oid_label_map,
             row_message->add_new_tuple());
+        if (!result.ok()) {
+          return result;
+        }
         row_message->add_old_tuple();
 
       } else if (
@@ -340,8 +357,10 @@ Status PopulateCDCSDKWriteRecord(
         }
       }
 
-      AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message);
-
+      auto result = AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message);
+      if (!result.ok()) {
+        return result;
+      }
       // Process intent records.
       row_message->set_commit_time(msg->hybrid_time());
     }
@@ -355,9 +374,12 @@ Status PopulateCDCSDKWriteRecord(
       if (column_id.type() == docdb::KeyEntryType::kColumnId) {
         const ColumnSchema& col = VERIFY_RESULT(schema.column_by_id(column_id.GetColumnId()));
 
-        AddColumnToMap(
+        auto result = AddColumnToMap(
             tablet_peer, col, decoded_value.primitive_value(), enum_oid_label_map,
             row_message->add_new_tuple());
+        if (!result.ok()) {
+          return result;
+        }
         row_message->add_old_tuple();
 
       } else if (column_id.type() != docdb::KeyEntryType::kSystemColumnId) {
@@ -545,8 +567,11 @@ Status PopulateCDCSDKSnapshotRecord(
 
     if (value && value->value_case() != QLValuePB::VALUE_NOT_SET
         && col_schema.pg_type_oid() != 0 /*kInvalidOid*/) {
-      docdb::SetValueFromQLBinaryWrapper(
+      auto result = docdb::SetValueFromQLBinaryWrapper(
           *value, col_schema.pg_type_oid(), enum_oid_label_map, cdc_datum_message);
+      if (!result.ok()) {
+        return result;
+      }
     } else {
       cdc_datum_message->set_column_type(col_schema.pg_type_oid());
     }
