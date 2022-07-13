@@ -103,7 +103,8 @@ Status AddPrimaryKey(
   size_t i = 0;
   for (const auto& col : decoded_key.doc_key().hashed_group()) {
     DatumMessagePB* tuple = AddTuple(row_message);
-    RETURN_NOT_OK(AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple));
+    RETURN_NOT_OK(
+        AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple));
     i++;
   }
 
@@ -189,8 +190,8 @@ Result<size_t> PopulatePackedRows(
       RETURN_NOT_OK(pv.DecodeFromValue(slice));
     }
     const ColumnSchema& col = VERIFY_RESULT(schema.column_by_id(column_data.id));
-
-    RETURN_NOT_OK(AddColumnToMap(tablet_peer, col, pv, enum_oid_label_map, row_message->add_new_tuple()));
+    RETURN_NOT_OK(
+        AddColumnToMap(tablet_peer, col, pv, enum_oid_label_map, row_message->add_new_tuple()));
     row_message->add_old_tuple();
   }
 
