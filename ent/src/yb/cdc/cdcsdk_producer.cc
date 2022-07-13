@@ -71,9 +71,8 @@ Status AddColumnToMap(
   if (tablet_peer->tablet()->table_type() == PGSQL_TABLE_TYPE) {
     col.ToQLValuePB(col_schema.type(), &ql_value);
     if (!IsNull(ql_value) && col_schema.pg_type_oid() != 0 /*kInvalidOid*/) {
-      auto result = docdb::SetValueFromQLBinaryWrapper(
-          ql_value, col_schema.pg_type_oid(), enum_oid_label_map, cdc_datum_message);
-        return result;
+      RETURN_NOT_OK(docdb::SetValueFromQLBinaryWrapper(
+          ql_value, col_schema.pg_type_oid(), enum_oid_label_map, cdc_datum_message));
     } else {
       cdc_datum_message->set_column_type(col_schema.pg_type_oid());
     }
@@ -104,23 +103,14 @@ Status AddPrimaryKey(
   size_t i = 0;
   for (const auto& col : decoded_key.doc_key().hashed_group()) {
     DatumMessagePB* tuple = AddTuple(row_message);
-
-    auto result =
-        AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple);
-    if (!result.ok()) {
-      return result;
-    }
+    RETURN_NOT_OK(AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple));
     i++;
   }
 
   for (const auto& col : decoded_key.doc_key().range_group()) {
     DatumMessagePB* tuple = AddTuple(row_message);
-
-    auto result =
-        AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple);
-    if (!result.ok()) {
-      return result;
-    }
+    RETURN_NOT_OK(
+        AddColumnToMap(tablet_peer, tablet_schema.column(i), col, enum_oid_label_map, tuple));
     i++;
   }
   return Status::OK();
@@ -200,9 +190,7 @@ Result<size_t> PopulatePackedRows(
     }
     const ColumnSchema& col = VERIFY_RESULT(schema.column_by_id(column_data.id));
 
-    // TODO: Need to add the error code.
-    auto result =
-        AddColumnToMap(tablet_peer, col, pv, enum_oid_label_map, row_message->add_new_tuple());
+    RETURN_NOT_OK(AddColumnToMap(tablet_peer, col, pv, enum_oid_label_map, row_message->add_new_tuple()));
     row_message->add_old_tuple();
   }
 
@@ -303,7 +291,6 @@ Status PopulateCDCSDKIntentRecord(
             row_message));
       } else {
         ++col_count;
-        row_message->add_old_tuple();
         docdb::Value decoded_value;
         RETURN_NOT_OK(decoded_value.Decode(intent.value_buf));
 
@@ -311,12 +298,9 @@ Status PopulateCDCSDKIntentRecord(
           const ColumnSchema& col =
               VERIFY_RESULT(schema.column_by_id(column_id_opt->GetColumnId()));
 
-          auto result = AddColumnToMap(
+          RETURN_NOT_OK(AddColumnToMap(
               tablet_peer, col, decoded_value.primitive_value(), enum_oid_label_map,
-              row_message->add_new_tuple());
-          if (!result.ok()) {
-            return result;
-          }
+              row_message->add_new_tuple()));
           row_message->add_old_tuple();
 
         } else if (column_id_opt && column_id_opt->type() != docdb::KeyEntryType::kSystemColumnId) {
@@ -401,11 +385,8 @@ Status PopulateCDCSDKWriteRecord(
         }
       }
 
-      auto result =
-          AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message);
-      if (!result.ok()) {
-        return result;
-      }
+      RETURN_NOT_OK(
+          AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message));
       // Process intent records.
       row_message->set_commit_time(msg->hybrid_time());
     }
@@ -426,12 +407,9 @@ Status PopulateCDCSDKWriteRecord(
           docdb::Value decoded_value;
           RETURN_NOT_OK(decoded_value.Decode(write_pair.value()));
 
-          auto result = AddColumnToMap(
+          RETURN_NOT_OK(AddColumnToMap(
               tablet_peer, col, decoded_value.primitive_value(), enum_oid_label_map,
-              row_message->add_new_tuple());
-          if (!result.ok()) {
-            return result;
-          }
+              row_message->add_new_tuple()));
           row_message->add_old_tuple();
 
         } else if (column_id.type() != docdb::KeyEntryType::kSystemColumnId) {
@@ -626,11 +604,8 @@ Status PopulateCDCSDKSnapshotRecord(
 
     if (value && value->value_case() != QLValuePB::VALUE_NOT_SET
         && col_schema.pg_type_oid() != 0 /*kInvalidOid*/) {
-      auto result = docdb::SetValueFromQLBinaryWrapper(
-          *value, col_schema.pg_type_oid(), enum_oid_label_map, cdc_datum_message);
-      if (!result.ok()) {
-        return result;
-      }
+      RETURN_NOT_OK(docdb::SetValueFromQLBinaryWrapper(
+          *value, col_schema.pg_type_oid(), enum_oid_label_map, cdc_datum_message));
     } else {
       cdc_datum_message->set_column_type(col_schema.pg_type_oid());
     }

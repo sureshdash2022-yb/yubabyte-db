@@ -51,7 +51,6 @@ constexpr int kRpcTimeout = NonTsanVsTsan(60, 120);
 static const std::string kUniverseId = "test_universe";
 static const std::string kNamespaceName = "test_namespace";
 constexpr static const char* const kTableName = "test_table";
-constexpr static const char* const kSecondTableName = "test_table_02";
 constexpr static const char* const kKeyColumnName = "key";
 constexpr static const char* const kValueColumnName = "value";
 

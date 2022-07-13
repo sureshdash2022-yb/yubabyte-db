@@ -334,7 +334,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     GetChangesRequestPB change_req2;
     GetChangesResponsePB change_resp2;
     PrepareChangeRequest(
-        &change_req2, stream_id, tablets, change_resp->cdc_sdk_checkpoint().index(),
+        &change_req2, stream_id, tablets, 0, change_resp->cdc_sdk_checkpoint().index(),
         change_resp->cdc_sdk_checkpoint().term(), change_resp->cdc_sdk_checkpoint().key(),
         change_resp->cdc_sdk_checkpoint().write_id(),
         change_resp->cdc_sdk_checkpoint().snapshot_time());
@@ -368,9 +368,9 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void PrepareChangeRequest(
       GetChangesRequestPB* change_req, const CDCStreamId& stream_id,
-      const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets, int64 index = 0,
-      int64 term = 0, std::string key = "", int32_t write_id = 0, int64 snapshot_time = 0,
-      int tablet_idx = 0) {
+      const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
+      const int tablet_idx = 0, int64 index = 0, int64 term = 0, std::string key = "",
+      int32_t write_id = 0, int64 snapshot_time = 0) {
     change_req->set_stream_id(stream_id);
     change_req->set_tablet_id(tablets.Get(tablet_idx).tablet_id());
     change_req->mutable_from_cdc_sdk_checkpoint()->set_index(index);
@@ -383,7 +383,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   void PrepareChangeRequest(
       GetChangesRequestPB* change_req, const CDCStreamId& stream_id,
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
-      const CDCSDKCheckpointPB& cp, int tablet_idx = 0) {
+      const CDCSDKCheckpointPB& cp, const int tablet_idx = 0) {
     change_req->set_stream_id(stream_id);
     change_req->set_tablet_id(tablets.Get(tablet_idx).tablet_id());
     change_req->mutable_from_cdc_sdk_checkpoint()->set_term(cp.term());
@@ -396,12 +396,12 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       SetCDCCheckpointRequestPB* set_checkpoint_req,
       const CDCStreamId stream_id,
       google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets,
-      int idx,
+      const int tablet_idx,
       const OpId& op_id,
       bool initial_checkpoint) {
     set_checkpoint_req->set_stream_id(stream_id);
     set_checkpoint_req->set_initial_checkpoint(initial_checkpoint);
-    set_checkpoint_req->set_tablet_id(tablets.Get(idx).tablet_id());
+    set_checkpoint_req->set_tablet_id(tablets.Get(tablet_idx).tablet_id());
     set_checkpoint_req->mutable_checkpoint()->mutable_op_id()->set_term(op_id.term);
     set_checkpoint_req->mutable_checkpoint()->mutable_op_id()->set_index(op_id.index);
   }
@@ -409,16 +409,14 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   Result<SetCDCCheckpointResponsePB> SetCDCCheckpoint(
       const CDCStreamId& stream_id,
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
-      const OpId& op_id = OpId::Min(),
-      bool initial_checkpoint = true,
-      int idx = 0) {
+      const OpId& op_id = OpId::Min(), bool initial_checkpoint = true, const int tablet_idx = 0) {
     RpcController set_checkpoint_rpc;
     SetCDCCheckpointRequestPB set_checkpoint_req;
     SetCDCCheckpointResponsePB set_checkpoint_resp;
     auto deadline = CoarseMonoClock::now() + test_client()->default_rpc_timeout();
     set_checkpoint_rpc.set_deadline(deadline);
     PrepareSetCheckpointRequest(
-        &set_checkpoint_req, stream_id, tablets, idx, op_id, initial_checkpoint);
+        &set_checkpoint_req, stream_id, tablets, tablet_idx, op_id, initial_checkpoint);
     Status st =
         cdc_proxy_->SetCDCCheckpoint(set_checkpoint_req, &set_checkpoint_resp, &set_checkpoint_rpc);
 
@@ -513,7 +511,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     GetChangesResponsePB change_resp;
 
     if (cp == nullptr) {
-      PrepareChangeRequest(&change_req, stream_id, tablets, 0, 0, "", 0, 0, tablet_idx);
+      PrepareChangeRequest(&change_req, stream_id, tablets, tablet_idx);
     } else {
       PrepareChangeRequest(&change_req, stream_id, tablets, *cp, tablet_idx);
     }
@@ -546,7 +544,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets) {
     GetChangesRequestPB change_req;
     GetChangesResponsePB change_resp;
-    PrepareChangeRequest(&change_req, stream_id, tablets, -1, -1, "", -1, 0);
+    PrepareChangeRequest(&change_req, stream_id, tablets, 0, -1, -1, "", -1);
     RpcController get_changes_rpc;
     RETURN_NOT_OK(cdc_proxy_->GetChanges(change_req, &change_resp, &get_changes_rpc));
 
@@ -750,9 +748,9 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     GetChangesResponsePB resp;
 
     if (cp == nullptr) {
-      PrepareChangeRequest(&req, stream_id, tablets);
+      PrepareChangeRequest(&req, stream_id, tablets, 0);
     } else {
-      PrepareChangeRequest(&req, stream_id, tablets, *cp);
+      PrepareChangeRequest(&req, stream_id, tablets, *cp, 0);
     }
 
     // The default value for need_schema_info is false.
@@ -2722,7 +2720,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumWithMultipleTablets)) {
   FLAGS_enable_update_local_peer_min_index = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+
   const uint32_t num_tablets = 3;
   vector<TabletId> table_id(2);
   vector<CDCStreamId> stream_id(2);
@@ -2730,6 +2728,13 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumWithMultipleTablets)) {
   vector<std::string> tablePrefix{"_01", "_02"};
   const int total_stream_count = 2;
 
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+
+  // Here we are verifying Enum Cache for a tablespace that needs to be re-updated // if there is a
+  // cache miss in any of the tsever. This can happen when enum cache entry is created for the
+  // all the tservers as part of CreateCDCStream or GetChanges call and later stage client
+  // created one more enum type on the same tablespace and a new table, then GetChanges call on
+  // the newtable should not fail,(precondition:- create new stream in same namespace).
   for (int idx = 0; idx < total_stream_count; idx++) {
     auto table = ASSERT_RESULT(CreateTable(
         &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, true,

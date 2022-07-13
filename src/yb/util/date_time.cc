@@ -188,8 +188,6 @@ Result<Timestamp> DateTime::TimestampFromString(const string& str,
         const time_duration t(hours, minutes, seconds, frac);
         time_zone_ptr tz = VERIFY_RESULT(StringToTimezone(m.str(8), input_format.use_utc));
         return ToTimestamp(local_date_time(d, t, tz, local_date_time::NOT_DATE_TIME_ON_ERROR));
-      } catch (boost::wrapexcept<boost::gregorian::bad_month>& e) {
-        return STATUS(InvalidArgument, "Invalid timestamp", e.what());
       } catch (std::exception& e) {
         return STATUS(InvalidArgument, "Invalid timestamp", e.what());
       }

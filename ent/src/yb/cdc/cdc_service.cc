@@ -1351,7 +1351,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
         &last_streamed_op_id, &last_readable_index, get_changes_deadline);
     // This specific error from the docdb_pgapi layer, to identify enum cache entry is out of date,
     // required to repopulate.
-    if (s.IsIOError()) {
+    if (s.IsIncomplete()) {
       EraseEnumMapFromCache(namespace_name);
       enum_map_result = UpdateCacheAndGetEnumMap(namespace_name);
       if (!enum_map_result.ok()) {
