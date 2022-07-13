@@ -1344,7 +1344,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
         &last_streamed_op_id, &last_readable_index, get_changes_deadline);
     // This specific error from the docdb_pgapi layer is used to identify enum cache entry is out of
     // date, hence we need to repopulate.
-    if (s.IsIncomplete()) {
+    if (s.IsCacheMissError()) {
       {
         // Recreate the enum cache entry for the corresponding namespace.
         std::lock_guard<decltype(mutex_)> l(mutex_);
