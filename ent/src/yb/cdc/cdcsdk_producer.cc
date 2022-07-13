@@ -277,11 +277,8 @@ Status PopulateCDCSDKIntentRecord(
 
       // Write pair contains record for different row. Create a new CDCRecord in this case.
       row_message->set_transaction_id(transaction_id.ToString());
-      auto result =
-          AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message);
-      if (!result.ok()) {
-        return result;
-      }
+      RETURN_NOT_OK(
+          AddPrimaryKey(tablet_peer, decoded_key, schema, enum_oid_label_map, row_message));
     }
 
     prev_key = primary_key;
