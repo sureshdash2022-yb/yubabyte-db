@@ -69,6 +69,7 @@
 #include "yb/util/result.h"
 #include "yb/util/test_macros.h"
 #include "yb/util/thread.h"
+#include "yb/util/date_time.h"
 
 #include "yb/yql/cql/ql/util/errcodes.h"
 #include "yb/yql/cql/ql/util/statement_result.h"
@@ -2771,6 +2772,13 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumWithMultipleTablets)) {
     LOG(INFO) << "Total GetChanges record counts: " << total_count;
     ASSERT_EQ(total_count, 100);
   }
+}
+
+TEST_F(CDCSDKYsqlTest, TestCQLTimestamp) {
+  LOG(INFO) << "suresh Inside the TestCQLTimestamp ......";
+  string ts_str = "2018-2-14 13:24:56.987+01:00";
+  Result<Timestamp> ts = DateTime::TimestampFromString(ts_str);
+  ASSERT_OK(ts);
 }
 
 }  // namespace enterprise

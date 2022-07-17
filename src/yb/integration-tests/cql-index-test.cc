@@ -100,6 +100,19 @@ TEST_F(CqlIndexTest, MultipleIndex) {
   CHECK_EQ(perm2, IndexPermissions::INDEX_PERM_READ_WRITE_AND_DELETE);
 }
 
+TEST_F(CqlIndexTest, TimeStampDataType) {
+  auto session1 = ASSERT_RESULT(EstablishSession(driver_.get()));
+
+  WARN_NOT_OK(
+      session1.ExecuteQuery(  
+          "CREATE TABLE t (key INT PRIMARY KEY, value TIMESTAMP) WITH transactions = { "
+          "'enabled' : true }"),
+      "Create table failed.");
+  ASSERT_OK(session1.ExecuteQuery(
+      "INSERT INTO t (key, value) VALUES (1, \"2018-13-14 13:24:56.987+01:00\")"));
+
+}
+
 class CqlIndexSmallWorkersTest : public CqlIndexTest {
  public:
   void SetUp() override {
