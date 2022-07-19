@@ -2797,15 +2797,12 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKLagMetrics)) {
       [&]() { return cdc_service->CDCEnabled(); }, MonoDelta::FromSeconds(30), "IsCDCEnabled"));
   // Check without GetChanges async_replication_sent_lag_micros and
   // async_replication_committed_lag_micros should be greater than zero.
-  ASSERT_OK(WaitFor([&]() -> Result<bool> {
-    auto metrics =
-        cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
-    LOG(INFO) << "suresh without getchanges async_replication_sent_lag_micros: "
-              << metrics->async_replication_sent_lag_micros->value()
-              << " async_replication_committed_lag_micros: "
-              << metrics->async_replication_committed_lag_micros->value();
-    return metrics->async_replication_sent_lag_micros->value() == 0 &&
-           metrics->async_replication_committed_lag_micros->value() == 0;
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        auto metrics =
+            cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
+        return metrics->async_replication_sent_lag_micros->value() == 0 &&
+               metrics->async_replication_committed_lag_micros->value() == 0;
       },
       MonoDelta::FromSeconds(10) * kTimeMultiplier, "Wait for Lag == 0"));
 
@@ -2820,16 +2817,12 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKLagMetrics)) {
   GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
   uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
   ASSERT_GT(record_size, 2);
-  ASSERT_OK(WaitFor([&]() -> Result<bool> {
-    auto metrics =
-        cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
-
-    LOG(INFO) << "suresh with getchanges async_replication_sent_lag_micros: "
-              << metrics->async_replication_sent_lag_micros->value()
-              << " async_replication_committed_lag_micros: "
-              << metrics->async_replication_committed_lag_micros->value();
-    return metrics->async_replication_sent_lag_micros->value() > 0 &&
-           metrics->async_replication_committed_lag_micros->value() > 0;
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        auto metrics =
+            cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
+        return metrics->async_replication_sent_lag_micros->value() > 0 &&
+               metrics->async_replication_committed_lag_micros->value() > 0;
       },
       MonoDelta::FromSeconds(10) * kTimeMultiplier, "Wait for Lag > 0"));
 }
