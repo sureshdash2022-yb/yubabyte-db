@@ -2779,6 +2779,9 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestSetCDCCheckpointWithHigherTse
   // Consider the tablet-1 LEADER is in tserver-3, tablet-2 LEADER in tserver-4 and tablet-3 LEADER
   // is in tserver-5. Consider cdc proxy connection is created with tserver-1. calling
   // setCDCCheckpoint from tserver-1 should PASS.
+  // Since number of tablets is lesser than the number of tservers, there must be atleast 2 tservers
+  // which do not host any of the tablet. But still, calling setCDCCheckpoint any of the
+  // tserver, even the ones not hosting tablet, should PASS.
   ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 3;

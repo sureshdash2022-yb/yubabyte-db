@@ -1043,7 +1043,7 @@ Result<SetCDCCheckpointResponsePB> CDCServiceImpl::SetCDCCheckpoint(
   // Case-1 The connected tserver does not contain the requested tablet_id.
   // Case-2 The connected tserver does not contain the tablet LEADER.
   if (s.IsNotFound() || !IsTabletPeerLeader(tablet_peer)) {
-    // Get tablet LEADER
+    // Get tablet LEADER.
     auto result = GetLeaderTServer(req.tablet_id());
     RETURN_NOT_OK_SET_CODE(result, CDCError(CDCErrorPB::NOT_LEADER));
     auto ts_leader = *result;
