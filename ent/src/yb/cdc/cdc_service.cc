@@ -1400,9 +1400,11 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
   }
 
   // Store information about the last server read & remote client ACK.
-  uint64_t last_record_hybrid_time = resp->records_size() > 0
-                                         ? resp->records(resp->records_size() - 1).time()
-                                         : resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1).row_message().commit_time();
+  uint64_t last_record_hybrid_time =
+      resp->records_size() > 0 ? resp->records(resp->records_size() - 1).time()
+                               : resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
+                                     .row_message()
+                                     .commit_time();
 
   if (record.checkpoint_type == IMPLICIT) {
     if (UpdateCheckpointRequired(record, cdc_sdk_op_id)) {
