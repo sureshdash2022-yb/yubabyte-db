@@ -165,9 +165,19 @@ void MakeNewProtoRecord(
     SetCDCSDKOpId(
         op_id.term, op_id.index, intent.write_id, intent.reverse_index_key, cdc_sdk_op_id_pb);
 
+
+    Slice key(intent.key_buf);
+    docdb::SubDocKey decoded_key;
+
+    auto result = decoded_key.DecodeFrom(&key, docdb::HybridTimeRequired::kTrue);
     CDCSDKProtoRecordPB* record_to_be_added = resp->add_cdc_sdk_proto_records();
     record_to_be_added->CopyFrom(*proto_record);
     record_to_be_added->mutable_row_message()->CopyFrom(row_message);
+    if (decoded_key.has_hybrid_time()) {
+      record_to_be_added->mutable_row_message()->set_commit_time(
+          decoded_key.hybrid_time().ToUint64());
+    }
+
 
     *write_id = intent.write_id;
     *reverse_index_key = intent.reverse_index_key;

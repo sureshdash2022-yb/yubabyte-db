@@ -2773,6 +2773,67 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumWithMultipleTablets)) {
   }
 }
 
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKLagMetrics)) {
+  FLAGS_update_metrics_interval_ms = 1;
+  ASSERT_OK(SetUpWithParams(1, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  const auto& tserver = test_cluster()->mini_tablet_server(0)->server();
+  auto cdc_service = dynamic_cast<CDCServiceImpl*>(
+      tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
+
+  ASSERT_OK(WaitFor(
+      [&]() { return cdc_service->CDCEnabled(); }, MonoDelta::FromSeconds(30), "IsCDCEnabled"));
+  // Check without GetChanges async_replication_sent_lag_micros and
+  // async_replication_committed_lag_micros should be greater than zero.
+  ASSERT_OK(WaitFor([&]() -> Result<bool> {
+    auto metrics =
+        cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
+    LOG(INFO) << "suresh without getchanges async_replication_sent_lag_micros: "
+              << metrics->async_replication_sent_lag_micros->value()
+              << " async_replication_committed_lag_micros: "
+              << metrics->async_replication_committed_lag_micros->value();
+    return metrics->async_replication_sent_lag_micros->value() == 0 &&
+           metrics->async_replication_committed_lag_micros->value() == 0;
+      },
+      MonoDelta::FromSeconds(10) * kTimeMultiplier, "Wait for Lag == 0"));
+
+  // Insert test rows, one at a time so they have different hybrid times.
+  ASSERT_OK(WriteRowsHelper(0, 1, &test_cluster_, true));
+  ASSERT_OK(WriteRowsHelper(1, 2, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  // Call get changes.
+  GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GT(record_size, 2);
+  ASSERT_OK(WaitFor([&]() -> Result<bool> {
+    auto metrics =
+        cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
+
+    LOG(INFO) << "suresh with getchanges async_replication_sent_lag_micros: "
+              << metrics->async_replication_sent_lag_micros->value()
+              << " async_replication_committed_lag_micros: "
+              << metrics->async_replication_committed_lag_micros->value();
+    return metrics->async_replication_sent_lag_micros->value() > 0 &&
+           metrics->async_replication_committed_lag_micros->value() > 0;
+      },
+      MonoDelta::FromSeconds(10) * kTimeMultiplier, "Wait for Lag > 0"));
+}
+
 }  // namespace enterprise
 }  // namespace cdc
 }  // namespace yb

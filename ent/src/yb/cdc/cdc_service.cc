@@ -1400,8 +1400,9 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
   }
 
   // Store information about the last server read & remote client ACK.
-  uint64_t last_record_hybrid_time = resp->records_size() > 0 ?
-      resp->records(resp->records_size() - 1).time() : 0;
+  uint64_t last_record_hybrid_time = resp->records_size() > 0
+                                         ? resp->records(resp->records_size() - 1).time()
+                                         : resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1).row_message().commit_time();
 
   if (record.checkpoint_type == IMPLICIT) {
     if (UpdateCheckpointRequired(record, cdc_sdk_op_id)) {
@@ -2858,10 +2859,20 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
   tablet_metric->last_readable_opid_index->set_value(last_readable_index);
   tablet_metric->last_checkpoint_opid_index->set_value(op_id.index);
   tablet_metric->last_getchanges_time->set_value(GetCurrentTimeMicros());
-  if (resp->records_size() > 0) {
-    auto& last_record = resp->records(resp->records_size() - 1);
-    tablet_metric->last_read_hybridtime->set_value(last_record.time());
-    auto last_record_micros = HybridTime(last_record.time()).GetPhysicalValueMicros();
+  if (resp->records_size() > 0 || resp->cdc_sdk_proto_records_size() > 0) {
+    uint64 last_record_time =
+        resp->records_size() > 0
+            ? resp->records(resp->records_size() - 1).time()
+            : resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
+                  .row_message()
+                  .commit_time();
+
+    uint64 first_record_time = resp->records_size() > 0
+                                   ? resp->records(0).time()
+                                   : resp->cdc_sdk_proto_records(0).row_message().commit_time();
+
+    tablet_metric->last_read_hybridtime->set_value(last_record_time);
+    auto last_record_micros = HybridTime(last_record_time).GetPhysicalValueMicros();
     tablet_metric->last_read_physicaltime->set_value(last_record_micros);
     // Only count bytes responded if we are including a response payload.
     tablet_metric->rpc_payload_bytes_responded->Increment(resp->ByteSize());
@@ -2869,8 +2880,7 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
     auto last_replicated_micros = GetLastReplicatedTime(tablet_peer);
     tablet_metric->async_replication_sent_lag_micros->set_value(
         last_replicated_micros - last_record_micros);
-    auto& first_record = resp->records(0);
-    auto first_record_micros = HybridTime(first_record.time()).GetPhysicalValueMicros();
+    auto first_record_micros = HybridTime(first_record_time).GetPhysicalValueMicros();
     tablet_metric->last_checkpoint_physicaltime->set_value(first_record_micros);
     // When there is lag between consumer and producer, consumer is caught up to either
     // the previous caught-up time, or to the last committed record time on consumer.
