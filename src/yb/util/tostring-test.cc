@@ -28,6 +28,8 @@
 #include "yb/util/monotime.h"
 #include "yb/util/tostring.h"
 #include "yb/util/uuid.h"
+#include "yb/util/date_time.h"
+#include "yb/util/result.h"
 
 namespace yb {
 // We should use namespace other than yb::ToString to check how does ToString works
@@ -35,7 +37,7 @@ namespace yb {
 namespace util_test {
 
 using yb::ToString;
-
+using yb::DateTime;
 namespace {
 
 template<class T>
@@ -220,6 +222,14 @@ TEST(ToStringTest, Uuid) {
 
   ASSERT_EQ(ToString(id), str);
   ASSERT_EQ(ToString(vec), ToString(std::vector<std::string>{str}));
+}
+
+TEST(TestDateTimeCase, TimeStampDataType) {
+  string ts_str = "2018-13-14 13:24:56.987+01:00";
+  // DateTime date_time;
+  //Timestamp ts;
+  Result<Timestamp> ts = DateTime::TimestampFromString(ts_str);
+  LOG(INFO) << "suresh: validated timestamp is: " << ts;
 }
 
 TEST(ToStringTest, Struct) {
