@@ -2844,6 +2844,40 @@ Result<OpId> CDCServiceImpl::GetLastCheckpoint(
   return OpId::FromString(row_block->row(0).column(0).string_value());
 }
 
+uint64 getCDCSDKLastSentRecordTime(const GetChangesResponsePB* resp) {
+  int cur_idx = resp->cdc_sdk_proto_records_size() - 1;
+  while (cur_idx >= 0) {
+    auto& ech_record = resp->cdc_sdk_proto_records(cur_idx);
+    if (ech_record.row_message().has_op() &&
+        (ech_record.row_message().op() == RowMessage_Op_INSERT ||
+         ech_record.row_message().op() == RowMessage_Op_UPDATE ||
+         ech_record.row_message().op() == RowMessage_Op_DELETE ||
+         ech_record.row_message().op() == RowMessage_Op_READ ||
+         ech_record.row_message().op() == RowMessage_Op_DDL)) {
+      return ech_record.row_message().commit_time();
+    }
+    cur_idx -= 1;
+  }
+  return 0;
+}
+
+uint64 getCDCSDKFirstSentRecordTime(const GetChangesResponsePB* resp) {
+  int cur_idx = 0;
+  while (cur_idx < resp->cdc_sdk_proto_records_size()) {
+    auto& ech_record = resp->cdc_sdk_proto_records(cur_idx);
+    if (ech_record.row_message().has_op() &&
+        (ech_record.row_message().op() == RowMessage_Op_INSERT ||
+         ech_record.row_message().op() == RowMessage_Op_UPDATE ||
+         ech_record.row_message().op() == RowMessage_Op_DELETE ||
+         ech_record.row_message().op() == RowMessage_Op_READ ||
+         ech_record.row_message().op() == RowMessage_Op_DDL)) {
+      return ech_record.row_message().commit_time();
+    }
+    cur_idx += 1;
+  }
+  return 0;
+}
+
 void CDCServiceImpl::UpdateCDCTabletMetrics(
     const GetChangesResponsePB* resp,
     const ProducerTabletInfo& producer_tablet,
@@ -2862,16 +2896,15 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
   tablet_metric->last_checkpoint_opid_index->set_value(op_id.index);
   tablet_metric->last_getchanges_time->set_value(GetCurrentTimeMicros());
   if (resp->records_size() > 0 || resp->cdc_sdk_proto_records_size() > 0) {
-    uint64 last_record_time =
-        resp->records_size() > 0
-            ? resp->records(resp->records_size() - 1).time()
-            : resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
-                  .row_message()
-                  .commit_time();
+    uint64 last_record_time = resp->records_size() > 0
+                                  ? resp->records(resp->records_size() - 1).time()
+                                  : getCDCSDKLastSentRecordTime(resp);
 
     uint64 first_record_time = resp->records_size() > 0
                                    ? resp->records(0).time()
-                                   : resp->cdc_sdk_proto_records(0).row_message().commit_time();
+                                   : getCDCSDKFirstSentRecordTime(resp);
+    LOG(INFO) << "suresh: first_record_time......: " << first_record_time
+              << " last_record_time:....:" << last_record_time;
 
     tablet_metric->last_read_hybridtime->set_value(last_record_time);
     auto last_record_micros = HybridTime(last_record_time).GetPhysicalValueMicros();
