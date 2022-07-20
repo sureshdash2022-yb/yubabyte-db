@@ -101,8 +101,6 @@ Result<DocHybridTime> DocHybridTime::DecodeFrom(Slice *slice) {
 
     result.hybrid_time_ =
         HybridTime::FromMicrosecondsAndLogicalValue(decoded_micros, decoded_logical);
-    //LOG(INFO) << "suresh: Inside DocHybridTime::DecodeFrom result.hybrid_time_: "
-      //        << result.hybrid_time_.value();
   }
 
   const auto ptr_before_decoding_write_id = slice->data();
