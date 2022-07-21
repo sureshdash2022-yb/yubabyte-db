@@ -1402,9 +1402,10 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
   // Store information about the last server read & remote client ACK.
   uint64_t last_record_hybrid_time =
       resp->records_size() > 0 ? resp->records(resp->records_size() - 1).time()
-                               : resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
-                                     .row_message()
-                                     .commit_time();
+      : resp->cdc_sdk_proto_records_size() > 0
+          ? resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
+                .row_message().commit_time()
+          : 0;
 
   if (record.checkpoint_type == IMPLICIT) {
     if (UpdateCheckpointRequired(record, cdc_sdk_op_id)) {
@@ -2844,7 +2845,7 @@ Result<OpId> CDCServiceImpl::GetLastCheckpoint(
   return OpId::FromString(row_block->row(0).column(0).string_value());
 }
 
-uint64 getCDCSDKLastSentRecordTime(const GetChangesResponsePB* resp) {
+uint64 GetCDCSDKLastSendRecordTime(const GetChangesResponsePB* resp) {
   int cur_idx = resp->cdc_sdk_proto_records_size() - 1;
   while (cur_idx >= 0) {
     auto& ech_record = resp->cdc_sdk_proto_records(cur_idx);
@@ -2861,7 +2862,7 @@ uint64 getCDCSDKLastSentRecordTime(const GetChangesResponsePB* resp) {
   return 0;
 }
 
-uint64 getCDCSDKFirstSentRecordTime(const GetChangesResponsePB* resp) {
+uint64 GetCDCSDKFirstSendRecordTime(const GetChangesResponsePB* resp) {
   int cur_idx = 0;
   while (cur_idx < resp->cdc_sdk_proto_records_size()) {
     auto& ech_record = resp->cdc_sdk_proto_records(cur_idx);
@@ -2898,13 +2899,11 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
   if (resp->records_size() > 0 || resp->cdc_sdk_proto_records_size() > 0) {
     uint64 last_record_time = resp->records_size() > 0
                                   ? resp->records(resp->records_size() - 1).time()
-                                  : getCDCSDKLastSentRecordTime(resp);
+                                  : GetCDCSDKLastSendRecordTime(resp);
 
     uint64 first_record_time = resp->records_size() > 0
                                    ? resp->records(0).time()
-                                   : getCDCSDKFirstSentRecordTime(resp);
-    LOG(INFO) << "suresh: first_record_time......: " << first_record_time
-              << " last_record_time:....:" << last_record_time;
+                                   : GetCDCSDKFirstSendRecordTime(resp);
 
     tablet_metric->last_read_hybridtime->set_value(last_record_time);
     auto last_record_micros = HybridTime(last_record_time).GetPhysicalValueMicros();
