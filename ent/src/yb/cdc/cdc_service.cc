@@ -2856,6 +2856,9 @@ Result<OpId> CDCServiceImpl::GetLastCheckpoint(
   return OpId::FromString(row_block->row(0).column(0).string_value());
 }
 
+// Find the right-most proto record from the cdc_sdk_proto_records
+// having valid commit_time, which will be used to calculate
+// CDCSDK lag metrics async_replication_sent_lag_micros.
 uint64 GetCDCSDKLastSendRecordTime(const GetChangesResponsePB* resp) {
   int cur_idx = resp->cdc_sdk_proto_records_size() - 1;
   while (cur_idx >= 0) {
@@ -2873,6 +2876,9 @@ uint64 GetCDCSDKLastSendRecordTime(const GetChangesResponsePB* resp) {
   return 0;
 }
 
+// Find the left-most proto record from the cdc_sdk_proto_records
+// having valid commit_time, which will be used to calculate
+// CDCSDK lag metrics async_replication_committed_lag_micros.
 uint64 GetCDCSDKFirstSendRecordTime(const GetChangesResponsePB* resp) {
   int cur_idx = 0;
   while (cur_idx < resp->cdc_sdk_proto_records_size()) {

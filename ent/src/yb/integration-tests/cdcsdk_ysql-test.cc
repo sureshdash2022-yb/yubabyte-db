@@ -2788,7 +2788,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestSetCDCCheckpointWithHigherTse
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
   ASSERT_EQ(tablets.size(), num_tablets);
-
   std::string table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
 
@@ -2809,9 +2808,12 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKLagMetrics)) {
   ASSERT_EQ(tablets.size(), num_tablets);
 
   TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
-  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  vector<CDCStreamId> stream_id(2);
+  for (int idx = 0; idx < 2; idx++) {
+    stream_id[idx]= ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  }
 
-  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id[0], tablets));
   ASSERT_FALSE(resp.has_error());
 
   const auto& tserver = test_cluster()->mini_tablet_server(0)->server();
@@ -2825,7 +2827,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKLagMetrics)) {
   ASSERT_OK(WaitFor(
       [&]() -> Result<bool> {
         auto metrics =
-            cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
+            cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id[0], tablets[0].tablet_id()});
         return metrics->async_replication_sent_lag_micros->value() == 0 &&
                metrics->async_replication_committed_lag_micros->value() == 0;
       },
@@ -2839,17 +2841,30 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKLagMetrics)) {
       /* is_compaction = */ false));
 
   // Call get changes.
-  GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id[0], tablets));
   uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
   ASSERT_GT(record_size, 2);
   ASSERT_OK(WaitFor(
       [&]() -> Result<bool> {
         auto metrics =
-            cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
+            cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id[0], tablets[0].tablet_id()});
         return metrics->async_replication_sent_lag_micros->value() > 0 &&
                metrics->async_replication_committed_lag_micros->value() > 0;
       },
       MonoDelta::FromSeconds(10) * kTimeMultiplier, "Wait for Lag > 0"));
+
+  // Now, delete the CDC stream and assert that lag is 0.
+  ASSERT_EQ(DeleteCDCStream(stream_id[0]), true);
+  VerifyStreamDeletedFromCdcState(test_client(), stream_id[0], tablets.Get(0).tablet_id());
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        auto metrics = cdc_service->GetCDCTabletMetrics(
+            {"" /* UUID */, stream_id[0], tablets[0].tablet_id()},
+            /* tablet_peer */ nullptr,
+            CreateCDCMetricsEntity::kFalse);
+        return metrics == nullptr;
+      },
+      MonoDelta::FromSeconds(10) * kTimeMultiplier, "Wait for tablet metrics entry remove."));
 }
 
 }  // namespace enterprise
