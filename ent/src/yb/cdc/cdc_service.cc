@@ -1530,11 +1530,22 @@ void CDCServiceImpl::UpdateLagMetrics() {
     if (!tablet_metric) {
       continue;
     }
+    auto get_stream_metadata = GetStream(stream_id);
+    if (!get_stream_metadata.ok()) {
+      continue;
+    }
+    StreamMetadata& record = **get_stream_metadata;
+
     if (tablet_peer->LeaderStatus() != consensus::LeaderStatus::LEADER_AND_READY) {
       // Set lag to 0 because we're not the leader for this tablet anymore, which means another peer
       // is responsible for tracking this tablet's lag.
-      tablet_metric->async_replication_sent_lag_micros->set_value(0);
-      tablet_metric->async_replication_committed_lag_micros->set_value(0);
+      if (record.source_type == CDCSDK) {
+        tablet_metric->async_cdcsdk_sent_lag_micros->set_value(0);
+        tablet_metric->async_cdcsdk_committed_lag_micros->set_value(0);
+      } else {
+        tablet_metric->async_replication_sent_lag_micros->set_value(0);
+        tablet_metric->async_replication_committed_lag_micros->set_value(0);
+      }
     } else {
       // Get the physical time of the last committed record on producer.
       auto last_replicated_micros = GetLastReplicatedTime(tablet_peer);
@@ -1543,13 +1554,14 @@ void CDCServiceImpl::UpdateLagMetrics() {
           !timestamp_ql_value.IsNull() ?
           timestamp_ql_value.timestamp_value().ToInt64() : 0;
       auto last_sent_micros = tablet_metric->last_read_physicaltime->value();
-      ComputeLagMetric(last_replicated_micros, last_sent_micros,
-                       cdc_state_last_replication_time_micros,
-                       tablet_metric->async_replication_sent_lag_micros);
+      ComputeLagMetric(
+          last_replicated_micros, last_sent_micros, cdc_state_last_replication_time_micros,
+          record.source_type == CDCSDK ? tablet_metric->async_cdcsdk_sent_lag_micros :tablet_metric->async_replication_sent_lag_micros);
       auto last_committed_micros = tablet_metric->last_checkpoint_physicaltime->value();
-      ComputeLagMetric(last_replicated_micros, last_committed_micros,
-                       cdc_state_last_replication_time_micros,
-                       tablet_metric->async_replication_committed_lag_micros);
+      ComputeLagMetric(
+          last_replicated_micros, last_committed_micros, cdc_state_last_replication_time_micros,
+          record.source_type == CDCSDK ? tablet_metric->async_cdcsdk_committed_lag_micros
+                                       : tablet_metric->async_replication_committed_lag_micros);
 
       // Time elapsed since last GetChanges, or since stream creation if no GetChanges received.
       // If no GetChanges received and creation time unitialized, do not update the metric.
@@ -1587,6 +1599,8 @@ void CDCServiceImpl::UpdateLagMetrics() {
       }
       tablet_metric->async_replication_sent_lag_micros->set_value(0);
       tablet_metric->async_replication_committed_lag_micros->set_value(0);
+      tablet_metric->async_cdcsdk_sent_lag_micros->set_value(0);
+      tablet_metric->async_cdcsdk_committed_lag_micros->set_value(0);
       RemoveCDCTabletMetrics(checkpoint.producer_tablet_info, tablet_peer);
     }
   }
@@ -2918,9 +2932,8 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
                                   ? resp->records(resp->records_size() - 1).time()
                                   : GetCDCSDKLastSendRecordTime(resp);
 
-    uint64 first_record_time = resp->records_size() > 0
-                                   ? resp->records(0).time()
-                                   : GetCDCSDKFirstSendRecordTime(resp);
+    uint64 first_record_time =
+        resp->records_size() > 0 ? resp->records(0).time() : GetCDCSDKFirstSendRecordTime(resp);
 
     tablet_metric->last_read_hybridtime->set_value(last_record_time);
     auto last_record_micros = HybridTime(last_record_time).GetPhysicalValueMicros();
@@ -2929,17 +2942,27 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
     tablet_metric->rpc_payload_bytes_responded->Increment(resp->ByteSize());
     // Get the physical time of the last committed record on producer.
     auto last_replicated_micros = GetLastReplicatedTime(tablet_peer);
-    tablet_metric->async_replication_sent_lag_micros->set_value(
-        last_replicated_micros - last_record_micros);
+    if (resp->cdc_sdk_proto_records_size() > 0) {
+      tablet_metric->async_cdcsdk_sent_lag_micros->set_value(
+          last_replicated_micros - last_record_micros);
+    } else {
+      tablet_metric->async_replication_sent_lag_micros->set_value(
+          last_replicated_micros - last_record_micros);
+    }
+
     auto first_record_micros = HybridTime(first_record_time).GetPhysicalValueMicros();
     tablet_metric->last_checkpoint_physicaltime->set_value(first_record_micros);
     // When there is lag between consumer and producer, consumer is caught up to either
     // the previous caught-up time, or to the last committed record time on consumer.
-    tablet_metric->last_caughtup_physicaltime->set_value(std::max(
-        tablet_metric->last_caughtup_physicaltime->value(),
-        first_record_micros));
-    tablet_metric->async_replication_committed_lag_micros->set_value(
-        last_replicated_micros - first_record_micros);
+    tablet_metric->last_caughtup_physicaltime->set_value(
+        std::max(tablet_metric->last_caughtup_physicaltime->value(), first_record_micros));
+    if (resp->cdc_sdk_proto_records_size() > 0) {
+      tablet_metric->async_cdcsdk_committed_lag_micros->set_value(
+          last_replicated_micros - first_record_micros);
+    } else {
+      tablet_metric->async_replication_committed_lag_micros->set_value(
+          last_replicated_micros - first_record_micros);
+    }
   } else {
     tablet_metric->rpc_heartbeats_responded->Increment();
     // If there are no more entries to be read, that means we're caught up.
@@ -2949,6 +2972,8 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
     tablet_metric->last_caughtup_physicaltime->set_value(GetCurrentTimeMicros());
     tablet_metric->async_replication_sent_lag_micros->set_value(0);
     tablet_metric->async_replication_committed_lag_micros->set_value(0);
+    tablet_metric->async_cdcsdk_sent_lag_micros->set_value(0);
+    tablet_metric->async_cdcsdk_committed_lag_micros->set_value(0);
   }
 }
 

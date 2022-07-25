@@ -74,6 +74,17 @@ METRIC_DEFINE_gauge_int64(cdc, async_replication_committed_lag_micros,
                           yb::MetricUnit::kMicroseconds,
                           "Lag between last record applied on consumer and producer.",
                           {0, yb::AggregationFunction::kMax} /* optional_args */);
+METRIC_DEFINE_gauge_int64(
+    cdc, async_cdcsdk_sent_lag_micros, "CDCSDK Physical Time Lag Last Sent",
+    yb::MetricUnit::kMicroseconds,
+    "Lag between last committed record in the producer and last send record to user.",
+    {0, yb::AggregationFunction::kMax} /* optional_args */);
+METRIC_DEFINE_gauge_int64(
+    cdc, async_cdcsdk_committed_lag_micros, "CDCSDK Physical Time Lag Last Committed",
+    yb::MetricUnit::kMicroseconds,
+    "Lag between last committed record in the producer and first send record to user.",
+    {0, yb::AggregationFunction::kMax} /* optional_args */);
+
 METRIC_DEFINE_gauge_bool(cdc,
                          is_bootstrap_required,
                          "Is Bootstrap Required",
@@ -116,6 +127,8 @@ CDCTabletMetrics::CDCTabletMetrics(const scoped_refptr<MetricEntity>& entity)
       GINIT(last_readable_opid_index),
       GINIT(async_replication_sent_lag_micros),
       GINIT(async_replication_committed_lag_micros),
+      GINIT(async_cdcsdk_sent_lag_micros),
+      GINIT(async_cdcsdk_committed_lag_micros),
       GINIT(is_bootstrap_required),
       GINIT(last_getchanges_time),
       GINIT(time_since_last_getchanges),
