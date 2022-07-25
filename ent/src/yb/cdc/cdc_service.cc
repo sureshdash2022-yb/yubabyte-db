@@ -1556,7 +1556,8 @@ void CDCServiceImpl::UpdateLagMetrics() {
       auto last_sent_micros = tablet_metric->last_read_physicaltime->value();
       ComputeLagMetric(
           last_replicated_micros, last_sent_micros, cdc_state_last_replication_time_micros,
-          record.source_type == CDCSDK ? tablet_metric->async_cdcsdk_sent_lag_micros :tablet_metric->async_replication_sent_lag_micros);
+          record.source_type == CDCSDK ? tablet_metric->async_cdcsdk_sent_lag_micros
+                                       : tablet_metric->async_replication_sent_lag_micros);
       auto last_committed_micros = tablet_metric->last_checkpoint_physicaltime->value();
       ComputeLagMetric(
           last_replicated_micros, last_committed_micros, cdc_state_last_replication_time_micros,
