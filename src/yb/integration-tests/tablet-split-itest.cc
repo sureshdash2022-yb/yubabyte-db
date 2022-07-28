@@ -2518,7 +2518,7 @@ TEST_F_EX(
   for (size_t i = 0; i < cluster_->num_tablet_servers(); i++) {
     auto* ts = cluster_->tablet_server(i);
     if (i != server_to_bootstrap_idx) {
-      ASSERT_OK(WaitForAllIntentsApplied(ts_map[ts->uuid()].get(), 15s * kTimeMultiplier));
+      ASSERT_OK(cluster_->WaitForAllIntentsApplied(ts, 15s * kTimeMultiplier));
       ASSERT_OK(cluster_->FlushTabletsOnSingleTServer(ts, {source_tablet_id}, false));
       // Prevent leader changes.
       ASSERT_OK(cluster_->SetFlag(ts, "enable_leader_failure_detection", "false"));
@@ -3195,5 +3195,6 @@ INSTANTIATE_TEST_CASE_P(
     TabletSplitExternalMiniClusterCrashITest,
     ::testing::Values(
         "TEST_crash_before_apply_tablet_split_op",
-        "TEST_crash_before_source_tablet_mark_split_done"));
+        "TEST_crash_before_source_tablet_mark_split_done",
+        "TEST_crash_after_tablet_split_completed"));
 }  // namespace yb
