@@ -803,6 +803,17 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       MonoDelta::FromSeconds(120),
       "Getting Number of intents"));
   }
+
+  Result<GetCDCDBStreamInfoResponsePB> GetDBStreamInfo(std::string db_stream_id) {
+    GetCDCDBStreamInfoRequestPB get_req;
+    GetCDCDBStreamInfoResponsePB get_resp;
+    get_req.set_db_stream_id(db_stream_id);
+
+    RpcController get_rpc;
+    get_rpc.set_timeout(MonoDelta::FromMilliseconds(FLAGS_cdc_write_rpc_timeout_ms));
+    RETURN_NOT_OK(cdc_proxy_->GetCDCDBStreamInfo(get_req, &get_resp, &get_rpc));
+    return get_resp;
+  }
 };
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestBaseFunctions)) {
@@ -2796,6 +2807,26 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestSetCDCCheckpointWithHigherTse
     auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets, OpId::Min(), true, idx));
     ASSERT_FALSE(resp.has_error());
   }
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupAfterDropTable)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(1, 1, false));
+
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version = */ nullptr));
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
+  ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
+
+  DropTable(&test_cluster_, kTableName);
+  SleepFor(MonoDelta::FromSeconds(10));
+
+  auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id));
+  ASSERT_TRUE(get_resp.has_error());
 }
 
 }  // namespace enterprise
