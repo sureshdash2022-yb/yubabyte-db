@@ -3642,7 +3642,7 @@ Result<std::shared_ptr<client::TableHandle>> CatalogManager::GetCDCStateTable() 
   return cdc_state_table;
 }
 
-void CatalogManager::DeleteFromCDCStateTable(
+Result<std::shared_ptr<client::YBqlWriteOp>> CatalogManager::DeleteFromCDCStateTable(
     std::shared_ptr<yb::client::TableHandle> cdc_state_table_result,
     std::shared_ptr<client::YBSession> session, const TabletId& tablet_id,
     const CDCStreamId& stream_id) {
@@ -3651,8 +3651,7 @@ void CatalogManager::DeleteFromCDCStateTable(
   QLAddStringHashValue(delete_req, tablet_id);
   QLAddStringRangeValue(delete_req, stream_id);
   session->Apply(delete_op);
-  LOG(INFO) << "Deleted cdc_state table entry for stream " << stream_id << " for tablet "
-            << tablet_id;
+  return delete_op;
 }
 
 Status CatalogManager::CleanUpCDCStreamsMetadata(
@@ -3672,6 +3671,7 @@ Status CatalogManager::CleanUpCDCStreamsMetadata(
       master::kCdcTabletId, master::kCdcStreamId, master::kCdcCheckpoint,
       master::kCdcLastReplicationTime};
   std::shared_ptr<client::YBSession> session = ybclient->NewSession();
+  std::unordered_set<CDCStreamInfo*> succeed_delete_streams;
   for (const auto& stream : streams) {
     // The set "tablets_with_streams" consists of all tablets not associated with the table
     // dropped. Tablets belonging to this set will not be deleted from cdc_state.
@@ -3684,14 +3684,59 @@ Status CatalogManager::CleanUpCDCStreamsMetadata(
       // 2. And tablet id is not contained in the set "tablets_with_streams".
       if ((stream_id == stream->id()) &&
           (tablets_with_streams.find(tablet_id) == tablets_with_streams.end())) {
-        DeleteFromCDCStateTable(cdc_state_table, session, tablet_id, stream_id);
+        auto result = DeleteFromCDCStateTable(cdc_state_table, session, tablet_id, stream_id);
+        if (!result.ok()) {
+          continue;
+        }
+        // Don't remove the stream from the system catalog as well as master cdc_stream_map_ cache,
+        // if there is an error during a row delete for the corresponding stream-id, tablet-id
+        // combination from cdc_state table.
+        std::shared_ptr<client::YBqlWriteOp> delete_op = *result;
+        if (!delete_op->succeeded()) {
+          LOG(WARNING) << "Error deleting cdc_state row with tablet id " << tablet_id
+                       << " and stream id " << stream_id << ": " << delete_op->response().status();
+          continue;
+        }
+        // Track those succeed delete stream in the set.
+        succeed_delete_streams.insert(stream.get());
+        LOG(INFO) << "Deleted cdc_state table entry for stream " << stream_id << " for tablet "
+                  << tablet_id;
       }
     }
   }
+
   Status s = session->TEST_Flush();
   if (!s.ok()) {
     LOG(ERROR) << "Unable to flush operations to delete cdc streams: " << s;
     return s.CloneAndPrepend("Error deleting cdc stream rows from cdc_state table");
+  }
+
+  std::vector<scoped_refptr<CDCStreamInfo>> streams_to_delete;
+  std::vector<CDCStreamInfo::WriteLock> locks;
+  for (auto& ech_delete_stream : succeed_delete_streams) {
+    streams_to_delete.push_back(ech_delete_stream);
+    locks.push_back(ech_delete_stream->LockForWrite());
+  }
+
+  TRACE("Removing from CDC stream maps");
+  {
+    LockGuard lock(mutex_);
+    for (auto ech_delete_stream_info : succeed_delete_streams) {
+      if (!cdc_stream_map_.erase(ech_delete_stream_info->id())) {
+        return STATUS(
+            IllegalState, "Could not remove CDC stream from map", ech_delete_stream_info->id());
+      }
+    }
+  }
+
+  RETURN_NOT_OK(CheckStatus(
+      sys_catalog_->Delete(leader_ready_term(), streams_to_delete),
+      "deleting CDC streams from sys-catalog"));
+  LOG(INFO) << "Successfully deleted streams " << JoinStreamsCSVLine(streams_to_delete)
+            << " from sys catalog";
+
+  for (auto& lock : locks) {
+    lock.Commit();
   }
   return Status::OK();
 }

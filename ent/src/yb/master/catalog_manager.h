@@ -220,7 +220,7 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
 
   Result<std::shared_ptr<client::TableHandle>> GetCDCStateTable();
 
-  void DeleteFromCDCStateTable(
+  Result<std::shared_ptr<client::YBqlWriteOp>> DeleteFromCDCStateTable(
       std::shared_ptr<yb::client::TableHandle> cdc_state_table_result,
       std::shared_ptr<client::YBSession> session, const TabletId& tablet_id,
       const CDCStreamId& stream_id);
