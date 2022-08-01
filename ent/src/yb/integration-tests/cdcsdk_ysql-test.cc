@@ -2922,10 +2922,9 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpDeleteStream
 }
 
 // Here we are creating a table test_table_1 and CDC stream ex:- stream-id-1.
-// Now create another table test_table_2 and create another stream ex:- stream-id-2 on the same namespace.
-// stream-id-1 and stream-id-2 are now associated with test_table_1.
-// drop test_table_1, call GetDBStreamInfo on both stream-id, we should not get any information
-// related to drop table.
+// Now create another table test_table_2 and create another stream ex:- stream-id-2 on the same
+// namespace. stream-id-1 and stream-id-2 are now associated with test_table_1. drop test_table_1,
+// call GetDBStreamInfo on both stream-id, we should not get any information related to drop table.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableCleanMetaData)) {
   // Setup cluster.
   ASSERT_OK(SetUpWithParams(3, 1, false));
