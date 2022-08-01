@@ -2841,47 +2841,75 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTab
   ASSERT_OK(SetUpWithParams(1, 1, false));
   const vector<string> table_list_suffix = {"_1", "_2", "_3"};
   vector<YBTableName> table(3);
+  CDCStreamId stream_id;
   int idx = 0;
+  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(3);
 
   for (auto ech_suffix : table_list_suffix) {
     table[idx] = ASSERT_RESULT(CreateTable(
         &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true, ech_suffix));
-    idx += 1;
-  }
+    ASSERT_OK(test_client()->GetTablets(
+        table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
+    TableId table_id =
+        ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName + ech_suffix));
+    stream_id = ASSERT_RESULT(CreateDBStream());
 
-  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
-  ASSERT_OK(
-      test_client()->GetTablets(table[0], 0, &tablets, /* partition_list_version = */ nullptr));
-  TableId table_id =
-      ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName + table_list_suffix[0]));
-  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
-
-  for (auto ech_prefix : table_list_suffix) {
     ASSERT_OK(WriteEnumsRows(
-        0 /* start */, 100 /* end */, &test_cluster_, ech_prefix, kNamespaceName,
-        kTableName));
+        0 /* start */, 100 /* end */, &test_cluster_, ech_suffix, kNamespaceName, kTableName));
+    idx += 1;
   }
 
   // Drop one of the table from the namespace, check stream associated with namespace should not
   // be deleted, but metadata related to the droppped table should be cleaned up from the master.
-  char drop_table[64] = {0};
-  (void)snprintf(drop_table, sizeof(drop_table), "%s_1", kTableName);
-  DropTable(&test_cluster_, drop_table);
-  (void)snprintf(drop_table, sizeof(drop_table), "%s_2", kTableName);
-  DropTable(&test_cluster_, drop_table);
+  for (int idx = 1; idx < 3; idx++) {
+    char drop_table[64] = {0};
+    (void)snprintf(drop_table, sizeof(drop_table), "%s_%d", kTableName, idx);
+    DropTable(&test_cluster_, drop_table);
+  }
 
   SleepFor(MonoDelta::FromSeconds(10));
-
   auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id));
   ASSERT_FALSE(get_resp.has_error());
 
   get_resp.table_info();
   ASSERT_EQ(get_resp.table_info_size(), 1);
 
-  for (auto& table_info : get_resp.table_info()) {
-    LOG(INFO) << "suresh: Table_id : " << table_info.table_id()
-              << " stream_id: " << table_info.stream_id();
+  for (int idx = 0; idx < 2; idx++) {
+    auto change_resp = GetChangesFromCDC(stream_id, tablets[idx], nullptr);
+    // test_table_1 and test_table_2 GetChanges should retrun error where as test_table_3 should
+    // succeed.
+    if (idx == 0 || idx == 1) {
+      ASSERT_FALSE(change_resp.ok());
+
+    } else {
+      uint32_t record_size = (*change_resp).cdc_sdk_proto_records_size();
+      ASSERT_GT(record_size, 100);
+    }
   }
+}
+
+// After delete stream, metadata related to stream should be deleted from the master cache as well
+// as system catalog.
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpDeleteStream)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(1, 1, false));
+
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version = */ nullptr));
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
+  ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
+
+  // Deleting the created DB Stream ID.
+  ASSERT_TRUE(DeleteCDCStream(stream_id));
+
+  auto get_resp = GetDBStreamInfo(stream_id);
+  ASSERT_TRUE(get_resp.ok());
+  ASSERT_TRUE((*get_resp).has_error());
+  ASSERT_EQ((*get_resp).table_info_size(), 0);
 }
 
 }  // namespace enterprise
