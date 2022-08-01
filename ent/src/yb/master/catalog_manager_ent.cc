@@ -3606,8 +3606,9 @@ Status CatalogManager::FindCDCStreamsMarkedForMetadataDeletion(
   return Status::OK();
 }
 
-void CatalogManager::GetTabletsWithStreams(
+Result<set<TableId>> CatalogManager::GetTabletsWithStreams(
     const scoped_refptr<CDCStreamInfo> stream, std::set<TabletId>* tablets_with_streams) {
+  set<TableId> drop_table_list;
   for (const auto& table_id : stream->table_id()) {
     TabletInfos tablets;
     scoped_refptr<TableInfo> table;
@@ -3620,12 +3621,18 @@ void CatalogManager::GetTabletsWithStreams(
     if (table) {
       tablets = table->GetTablets();
     }
+
     // For the table dropped, GetTablets() will be empty.
     // For all other tables, GetTablets() will be non-empty.
     for (const auto& tablet : tablets) {
       tablets_with_streams->insert(tablet->tablet_id());
     }
+
+    if (tablets.size() == 0) {
+      drop_table_list.insert(table_id);
+    }
   }
+  return drop_table_list;
 }
 
 Result<std::shared_ptr<client::TableHandle>> CatalogManager::GetCDCStateTable() {
@@ -3671,12 +3678,16 @@ Status CatalogManager::CleanUpCDCStreamsMetadata(
       master::kCdcTabletId, master::kCdcStreamId, master::kCdcCheckpoint,
       master::kCdcLastReplicationTime};
   std::shared_ptr<client::YBSession> session = ybclient->NewSession();
-  std::unordered_set<CDCStreamInfo*> succeed_delete_streams;
+  std::unordered_map<CDCStreamId, set<TableId>> drop_tablelist_stream;
   for (const auto& stream : streams) {
     // The set "tablets_with_streams" consists of all tablets not associated with the table
     // dropped. Tablets belonging to this set will not be deleted from cdc_state.
     std::set<TabletId> tablets_with_streams;
-    GetTabletsWithStreams(stream, &tablets_with_streams);
+    auto drop_table_list = GetTabletsWithStreams(stream, &tablets_with_streams);
+    if (!drop_table_list.ok()) {
+      continue;
+    }
+
     for (const auto& row : client::TableRange(*cdc_state_table, options)) {
       auto tablet_id = row.column(master::kCdcTabletIdIdx).string_value();
       auto stream_id = row.column(master::kCdcStreamIdIdx).string_value();
@@ -3688,21 +3699,22 @@ Status CatalogManager::CleanUpCDCStreamsMetadata(
         if (!result.ok()) {
           continue;
         }
-        // Don't remove the stream from the system catalog as well as master cdc_stream_map_ cache,
-        // if there is an error during a row delete for the corresponding stream-id, tablet-id
-        // combination from cdc_state table.
+        // Don't remove the stream from the system catalog as well as master cdc_stream_map_
+        // cache, if there is an error during a row delete for the corresponding stream-id,
+        // tablet-id combination from cdc_state table.
         std::shared_ptr<client::YBqlWriteOp> delete_op = *result;
         if (!delete_op->succeeded()) {
           LOG(WARNING) << "Error deleting cdc_state row with tablet id " << tablet_id
                        << " and stream id " << stream_id << ": " << delete_op->response().status();
           continue;
         }
-        // Track those succeed delete stream in the set.
-        succeed_delete_streams.insert(stream.get());
         LOG(INFO) << "Deleted cdc_state table entry for stream " << stream_id << " for tablet "
                   << tablet_id;
       }
     }
+    // Track those succeed delete stream in the map.
+    LOG(INFO) << "suresh: drop table list size: " << (*drop_table_list).size();
+    drop_tablelist_stream[stream->id()] = *drop_table_list;
   }
 
   Status s = session->TEST_Flush();
@@ -3712,16 +3724,32 @@ Status CatalogManager::CleanUpCDCStreamsMetadata(
   }
 
   std::vector<scoped_refptr<CDCStreamInfo>> streams_to_delete;
+  //std::vector<scoped_refptr<CDCStreamInfo>> streams_to_update;
+  std::unordered_map<CDCStreamId, set<TableId>> stream_tablelist_update;
+  std::vector<scoped_refptr<CDCStreamInfo>> streams_to_update;
   std::vector<CDCStreamInfo::WriteLock> locks;
-  for (auto& ech_delete_stream : succeed_delete_streams) {
-    streams_to_delete.push_back(ech_delete_stream);
-    locks.push_back(ech_delete_stream->LockForWrite());
-  }
 
   TRACE("Removing from CDC stream maps");
   {
     LockGuard lock(mutex_);
-    for (auto ech_delete_stream_info : succeed_delete_streams) {
+    for (auto& [delete_stream_id, drop_table_list] : drop_tablelist_stream) {
+      if (cdc_stream_map_.find(delete_stream_id) != cdc_stream_map_.end()) {
+        scoped_refptr<CDCStreamInfo> cdc_stream = cdc_stream_map_[delete_stream_id];
+        auto ltm = cdc_stream->LockForWrite();
+        // Delete the stream from cdc_stream_map_ if all tables associated with stream are dropped
+        // else remove those tables that are dropped from the cdc_stream_map_ and update the
+        // system catalog.
+        LOG(INFO) << "suresh: stream having ltm->table_id().size(): " << ltm->table_id().size()
+                  << " tables drop count:" << drop_table_list.size();
+        if (ltm->table_id().size() == static_cast<int>(drop_table_list.size())) {
+          streams_to_delete.push_back(cdc_stream);
+        } else {
+          stream_tablelist_update[delete_stream_id] = drop_table_list;
+        }
+        locks.push_back(std::move(ltm));
+      }
+    }
+    for (auto ech_delete_stream_info : streams_to_delete) {
       if (!cdc_stream_map_.erase(ech_delete_stream_info->id())) {
         return STATUS(
             IllegalState, "Could not remove CDC stream from map", ech_delete_stream_info->id());
@@ -3731,9 +3759,39 @@ Status CatalogManager::CleanUpCDCStreamsMetadata(
 
   RETURN_NOT_OK(CheckStatus(
       sys_catalog_->Delete(leader_ready_term(), streams_to_delete),
-      "deleting CDC streams from sys-catalog"));
+      "deleting CDC streams from system catalog"));
   LOG(INFO) << "Successfully deleted streams " << JoinStreamsCSVLine(streams_to_delete)
-            << " from sys catalog";
+            << " from system catalog";
+
+  for (auto& lock : locks) {
+    lock.Commit();
+  }
+
+  locks.clear();
+  TRACE("Updating CDC stream maps");
+  {
+    LockGuard lock(mutex_);
+    for (auto& [update_stream_id, drop_table_list] : stream_tablelist_update) {
+      scoped_refptr<CDCStreamInfo> cdc_stream = cdc_stream_map_[update_stream_id];
+      auto ltm = cdc_stream->LockForWrite();
+      for (auto ech_table_id : drop_table_list) {
+        LOG(INFO) << "suresh: Remvoing the table_id: " << ech_table_id;
+        for (auto it = ltm->table_id().begin(); it != ltm->table_id().end(); it++) {
+          if (*it == ech_table_id) {
+            ltm.mutable_data()->pb.mutable_table_id()->erase(it);
+          }
+        }
+      }
+      locks.push_back(std::move(ltm));
+      streams_to_update.push_back(cdc_stream);
+    }
+  }
+
+  RETURN_NOT_OK(CheckStatus(
+      sys_catalog_->Upsert(leader_ready_term(), streams_to_update),
+      "updating CDC streams in system catalog"));
+  LOG(INFO) << "Successfully updated streams " << JoinStreamsCSVLine(streams_to_update)
+            << " in system catalog";
 
   for (auto& lock : locks) {
     lock.Commit();

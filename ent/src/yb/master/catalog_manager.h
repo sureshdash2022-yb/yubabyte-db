@@ -215,7 +215,7 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
   // Delete specified CDC streams.
   Status CleanUpDeletedCDCStreams(const std::vector<scoped_refptr<CDCStreamInfo>>& streams);
 
-  void GetTabletsWithStreams(
+  Result<set<TableId>> GetTabletsWithStreams(
       const scoped_refptr<CDCStreamInfo> stream, std::set<TabletId>* tablets_with_streams);
 
   Result<std::shared_ptr<client::TableHandle>> GetCDCStateTable();

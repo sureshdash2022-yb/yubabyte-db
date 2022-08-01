@@ -2809,7 +2809,10 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestSetCDCCheckpointWithHigherTse
   }
 }
 
-TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupAfterDropTable)) {
+// Here creating a single table inside a namespace and a CDC stream on top of the namespace.//
+// Deleting the table should clean every thing from master cache as well as the system
+// catalog.
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupDropTable)) {
   // Setup cluster.
   ASSERT_OK(SetUpWithParams(1, 1, false));
 
@@ -2827,6 +2830,57 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupAfterDro
 
   auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id));
   ASSERT_TRUE(get_resp.has_error());
+  ASSERT_EQ(get_resp.table_info_size(), 0);
+}
+
+// Here we are creating multiple tables inside a namespace and creating CDC streams on the
+// namespace. Deleting multiple tables from the namespace should only clean metadata related to
+// deleted tables from master cache as well as system catalog.
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTableDrop)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(1, 1, false));
+  const vector<string> table_list_suffix = {"_1", "_2", "_3"};
+  vector<YBTableName> table(3);
+  int idx = 0;
+
+  for (auto ech_suffix : table_list_suffix) {
+    table[idx] = ASSERT_RESULT(CreateTable(
+        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true, ech_suffix));
+    idx += 1;
+  }
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(
+      test_client()->GetTablets(table[0], 0, &tablets, /* partition_list_version = */ nullptr));
+  TableId table_id =
+      ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName + table_list_suffix[0]));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
+
+  for (auto ech_prefix : table_list_suffix) {
+    ASSERT_OK(WriteEnumsRows(
+        0 /* start */, 100 /* end */, &test_cluster_, ech_prefix, kNamespaceName,
+        kTableName));
+  }
+
+  // Drop one of the table from the namespace, check stream associated with namespace should not
+  // be deleted, but metadata related to the droppped table should be cleaned up from the master.
+  char drop_table[64] = {0};
+  (void)snprintf(drop_table, 64, "%s_1", kTableName);
+  DropTable(&test_cluster_, drop_table);
+  (void)snprintf(drop_table, 64, "%s_2", kTableName);
+  DropTable(&test_cluster_, drop_table);
+
+  SleepFor(MonoDelta::FromSeconds(10));
+
+  auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id));
+  ASSERT_FALSE(get_resp.has_error());
+
+  get_resp.table_info();
+  ASSERT_EQ(get_resp.table_info_size(), 1);
+
+  for (auto& table_info : get_resp.table_info()) {
+    LOG(INFO) << "suresh: Table_id : " << table_info.table_id() << " stream_id: " << table_info.stream_id();
+  }
 }
 
 }  // namespace enterprise
