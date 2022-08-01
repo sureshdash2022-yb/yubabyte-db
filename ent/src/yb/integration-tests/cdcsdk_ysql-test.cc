@@ -2865,9 +2865,9 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTab
   // Drop one of the table from the namespace, check stream associated with namespace should not
   // be deleted, but metadata related to the droppped table should be cleaned up from the master.
   char drop_table[64] = {0};
-  (void)snprintf(drop_table, 64, "%s_1", kTableName);
+  (void)snprintf(drop_table, sizeof(drop_table), "%s_1", kTableName);
   DropTable(&test_cluster_, drop_table);
-  (void)snprintf(drop_table, 64, "%s_2", kTableName);
+  (void)snprintf(drop_table, sizeof(drop_table), "%s_2", kTableName);
   DropTable(&test_cluster_, drop_table);
 
   SleepFor(MonoDelta::FromSeconds(10));
@@ -2879,7 +2879,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTab
   ASSERT_EQ(get_resp.table_info_size(), 1);
 
   for (auto& table_info : get_resp.table_info()) {
-    LOG(INFO) << "suresh: Table_id : " << table_info.table_id() << " stream_id: " << table_info.stream_id();
+    LOG(INFO) << "suresh: Table_id : " << table_info.table_id()
+              << " stream_id: " << table_info.stream_id();
   }
 }
 

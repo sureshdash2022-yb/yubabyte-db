@@ -3729,7 +3729,6 @@ Status CatalogManager::CleanUpCDCStreamsMetadata(
   }
 
   std::vector<scoped_refptr<CDCStreamInfo>> streams_to_delete;
-  //std::vector<scoped_refptr<CDCStreamInfo>> streams_to_update;
   std::unordered_map<CDCStreamId, set<TableId>> stream_tablelist_update;
   std::vector<scoped_refptr<CDCStreamInfo>> streams_to_update;
   std::vector<CDCStreamInfo::WriteLock> locks;
