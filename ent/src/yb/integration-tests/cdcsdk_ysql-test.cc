@@ -2814,7 +2814,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestSetCDCCheckpointWithHigherTse
 // catalog.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupDropTable)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(3, 1, false));
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
@@ -2838,7 +2838,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupDropTabl
 // deleted tables from master cache as well as system catalog.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTableDrop)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(3, 1, false));
   const vector<string> table_list_suffix = {"_1", "_2", "_3"};
   vector<YBTableName> table(3);
   CDCStreamId stream_id;
@@ -2886,13 +2886,22 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTab
       ASSERT_GT(record_size, 100);
     }
   }
+
+  // Deleting the created DB Stream ID.
+  ASSERT_TRUE(DeleteCDCStream(stream_id));
+
+  // GetChanges should retrun error, for all tables.
+  for (int idx = 0; idx < 2; idx++) {
+    auto change_resp = GetChangesFromCDC(stream_id, tablets[idx], nullptr);
+    ASSERT_FALSE(change_resp.ok());
+  }
 }
 
 // After delete stream, metadata related to stream should be deleted from the master cache as well
 // as system catalog.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpDeleteStream)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(3, 1, false));
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
@@ -2910,6 +2919,103 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpDeleteStream
   ASSERT_TRUE(get_resp.ok());
   ASSERT_TRUE((*get_resp).has_error());
   ASSERT_EQ((*get_resp).table_info_size(), 0);
+}
+
+// Here we are creating a table test_table_1 and CDC stream ex:- stream-id-1.
+// Now create another table test_table_2 and create another stream ex:- stream-id-2 on the same namespace.
+// stream-id-1 and stream-id-2 are now associated with test_table_1.
+// drop test_table_1, call GetDBStreamInfo on both stream-id, we should not get any information
+// related to drop table.
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableCleanMetaData)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+  const vector<string> table_list_suffix = {"_1", "_2"};
+  vector<YBTableName> table(2);
+  vector<CDCStreamId> stream_id(2);
+  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(2);
+
+  for (int idx = 0; idx < 2; idx++) {
+    table[idx] = ASSERT_RESULT(CreateTable(
+        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true,
+        table_list_suffix[idx]));
+    ASSERT_OK(test_client()->GetTablets(
+        table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
+    TableId table_id = ASSERT_RESULT(
+        GetTableId(&test_cluster_, kNamespaceName, kTableName + table_list_suffix[idx]));
+
+    stream_id[idx] = ASSERT_RESULT(CreateDBStream());
+    ASSERT_OK(WriteEnumsRows(
+        0 /* start */, 100 /* end */, &test_cluster_, table_list_suffix[idx], kNamespaceName,
+        kTableName));
+  }
+
+  // Drop table test_table_1 which is associated with both streams.
+  for (int idx = 1; idx < 2; idx++) {
+    char drop_table[64] = {0};
+    (void)snprintf(drop_table, sizeof(drop_table), "%s_%d", kTableName, idx);
+    DropTable(&test_cluster_, drop_table);
+  }
+
+  SleepFor(MonoDelta::FromSeconds(10));
+
+  for (int idx = 0; idx < 2; idx++) {
+    auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id[idx]));
+    // stream-1 is associated with single table, so as part table drop stream-1 is also cleaned.
+    if (idx == 0) {
+      ASSERT_TRUE(get_resp.has_error());
+      ASSERT_EQ(get_resp.table_info_size(), 0);
+
+    } else {
+      // stream-2 is associated both tables, so dropping one table, should not clean the stream from
+      // cache as well as from system catalog, except drop table metadata.
+      ASSERT_FALSE(get_resp.has_error());
+      ASSERT_EQ(get_resp.table_info_size(), 1);
+    }
+  }
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableDeleteStream)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+  const vector<string> table_list_suffix = {"_1", "_2"};
+  vector<YBTableName> table(2);
+  vector<CDCStreamId> stream_id(2);
+  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(2);
+
+  for (int idx = 0; idx < 2; idx++) {
+    table[idx] = ASSERT_RESULT(CreateTable(
+        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true,
+        table_list_suffix[idx]));
+    ASSERT_OK(test_client()->GetTablets(
+        table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
+    TableId table_id = ASSERT_RESULT(
+        GetTableId(&test_cluster_, kNamespaceName, kTableName + table_list_suffix[idx]));
+
+    stream_id[idx] = ASSERT_RESULT(CreateDBStream());
+    ASSERT_OK(WriteEnumsRows(
+        0 /* start */, 100 /* end */, &test_cluster_, table_list_suffix[idx], kNamespaceName,
+        kTableName));
+  }
+
+  // Deleting the stream-2 associated with both tables
+  ASSERT_TRUE(DeleteCDCStream(stream_id[1]));
+
+  SleepFor(MonoDelta::FromSeconds(10));
+
+  for (int idx = 0; idx < 2; idx++) {
+    auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id[idx]));
+    // stream-1 is not deleted, so there should not be any cleanup for it.
+    if (idx == 0) {
+      ASSERT_FALSE(get_resp.has_error());
+      ASSERT_EQ(get_resp.table_info_size(), 1);
+
+    } else {
+      // stream-2 is deleted, so it's metadata from master cache as well as from system catalog need
+      // to be cleaned.
+      ASSERT_TRUE(get_resp.has_error());
+      ASSERT_EQ(get_resp.table_info_size(), 0);
+    }
+  }
 }
 
 }  // namespace enterprise
