@@ -20,6 +20,8 @@
 
 namespace yb {
 
+using StreamTablesMap = std::unordered_map<CDCStreamId, set<TableId>>;
+
 class UniverseKeyRegistryPB;
 
 namespace master {
@@ -227,6 +229,11 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
 
   // Delete specified CDC streams metadata.
   Status CleanUpCDCStreamsMetadata(const std::vector<scoped_refptr<CDCStreamInfo>>& streams);
+
+  Result<StreamTablesMap> DeleteStreamsFromMapAndSystemCatalog(
+      const StreamTablesMap& drop_stream_tablelist);
+
+  Status UpdateStreamsIntoMapAndSystemCatalog(const StreamTablesMap& update_tablelist_stream);
 
   Status UpdateCDCStreams(
       const std::vector<CDCStreamId>& stream_ids,
