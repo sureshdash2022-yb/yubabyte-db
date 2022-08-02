@@ -3668,11 +3668,11 @@ Result<std::shared_ptr<client::YBqlWriteOp>> CatalogManager::DeleteFromCDCStateT
 
 Result<StreamTablesMap> CatalogManager::DeleteStreamsFromMapAndSystemCatalog(
     const StreamTablesMap& drop_stream_tablelist) {
-  TRACE("Removing from CDC streams from map and system catalog.");
   std::vector<scoped_refptr<CDCStreamInfo>> streams_to_delete;
   StreamTablesMap update_tablelist_stream;
   std::vector<CDCStreamInfo::WriteLock> locks;
 
+  TRACE("Removing from CDC streams from map and system catalog.");
   {
     LockGuard lock(mutex_);
     for (auto& [delete_stream_id, drop_table_list] : drop_stream_tablelist) {
@@ -3712,9 +3712,10 @@ Result<StreamTablesMap> CatalogManager::DeleteStreamsFromMapAndSystemCatalog(
 
 Status CatalogManager::UpdateStreamsIntoMapAndSystemCatalog(
     const StreamTablesMap& update_tablelist_stream) {
-  TRACE("Updating CDC streams into map and system catalog.");
   std::vector<CDCStreamInfo::WriteLock> locks;
   std::vector<scoped_refptr<CDCStreamInfo>> streams_to_update;
+
+  TRACE("Updating CDC streams into map and system catalog.");
   {
     LockGuard lock(mutex_);
     for (auto& [update_stream_id, drop_table_list] : update_tablelist_stream) {

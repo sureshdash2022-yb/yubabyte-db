@@ -804,7 +804,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       "Getting Number of intents"));
   }
 
-  Result<GetCDCDBStreamInfoResponsePB> GetDBStreamInfo(std::string db_stream_id) {
+  Result<GetCDCDBStreamInfoResponsePB> GetDBStreamInfo(const CDCStreamId db_stream_id) {
     GetCDCDBStreamInfoRequestPB get_req;
     GetCDCDBStreamInfoResponsePB get_resp;
     get_req.set_db_stream_id(db_stream_id);
@@ -814,6 +814,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     RETURN_NOT_OK(cdc_proxy_->GetCDCDBStreamInfo(get_req, &get_resp, &get_rpc));
     return get_resp;
   }
+
 };
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestBaseFunctions)) {
@@ -2809,7 +2810,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestSetCDCCheckpointWithHigherTse
   }
 }
 
-// Here creating a single table inside a namespace and a CDC stream on top of the namespace.//
+// Here creating a single table inside a namespace and a CDC stream on top of the namespace.
 // Deleting the table should clean every thing from master cache as well as the system
 // catalog.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupAndDropTable)) {
@@ -2833,8 +2834,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupAndDropT
   ASSERT_EQ(get_resp.table_info_size(), 0);
 }
 
-// Here we are creating multiple tables inside a namespace and creating CDC streams on the
-// namespace. Deleting multiple tables from the namespace should only clean metadata related to
+// Here we are creating multiple tables and a CDC stream on the same namespace.
+// Deleting multiple tables from the namespace should only clean metadata related to
 // deleted tables from master cache as well as system catalog.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTableDrop)) {
   // Setup cluster.
@@ -2852,12 +2853,12 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTab
         table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
     TableId table_id =
         ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName + ech_suffix));
-    stream_id = ASSERT_RESULT(CreateDBStream());
 
     ASSERT_OK(WriteEnumsRows(
         0 /* start */, 100 /* end */, &test_cluster_, ech_suffix, kNamespaceName, kTableName));
     idx += 1;
   }
+  stream_id = ASSERT_RESULT(CreateDBStream());
 
   // Drop one of the table from the namespace, check stream associated with namespace should not
   // be deleted, but metadata related to the droppped table should be cleaned up from the master.
@@ -2887,7 +2888,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTab
     }
   }
 
-  // Deleting the created DB Stream ID.
+  // Deleting the created stream.
   ASSERT_TRUE(DeleteCDCStream(stream_id));
 
   // GetChanges should retrun error, for all tables.
@@ -2921,7 +2922,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpAndDeleteStr
   ASSERT_EQ((*get_resp).table_info_size(), 0);
 }
 
-// Here we are creating a table test_table_1 and CDC stream ex:- stream-id-1.
+// Here we are creating a table test_table_1 and a CDC stream ex:- stream-id-1.
 // Now create another table test_table_2 and create another stream ex:- stream-id-2 on the same
 // namespace. stream-id-1 and stream-id-2 are now associated with test_table_1. drop test_table_1,
 // call GetDBStreamInfo on both stream-id, we should not get any information related to drop table.
