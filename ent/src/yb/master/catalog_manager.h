@@ -20,8 +20,6 @@
 
 namespace yb {
 
-using StreamTablesMap = std::unordered_map<CDCStreamId, set<TableId>>;
-
 class UniverseKeyRegistryPB;
 
 namespace master {
@@ -217,8 +215,9 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
   // Delete specified CDC streams.
   Status CleanUpDeletedCDCStreams(const std::vector<scoped_refptr<CDCStreamInfo>>& streams);
 
-  Result<set<TableId>> GetTabletsWithStreams(
-      const scoped_refptr<CDCStreamInfo> stream, std::set<TabletId>* tablets_with_streams);
+  void GetValidTabletsAndDropTablesDetail(
+      const scoped_refptr<CDCStreamInfo> stream, std::set<TabletId>* tablets_with_streams,
+      std::set<TableId>* dropped_tables);
 
   Result<std::shared_ptr<client::TableHandle>> GetCDCStateTable();
 
@@ -230,10 +229,9 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
   // Delete specified CDC streams metadata.
   Status CleanUpCDCStreamsMetadata(const std::vector<scoped_refptr<CDCStreamInfo>>& streams);
 
-  Result<StreamTablesMap> DeleteStreamsFromMapAndSystemCatalog(
-      const StreamTablesMap& drop_stream_tablelist);
+  using StreamTablesMap = std::unordered_map<CDCStreamId, set<TableId>>;
 
-  Status UpdateStreamsIntoMapAndSystemCatalog(const StreamTablesMap& update_tablelist_stream);
+  Status CleanUpCDCMetaDataFromSystemCatalog(const StreamTablesMap& drop_stream_tablelist);
 
   Status UpdateCDCStreams(
       const std::vector<CDCStreamId>& stream_ids,

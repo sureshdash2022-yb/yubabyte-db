@@ -1449,8 +1449,9 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeCDCStreamDelet
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
   DropTable(&test_cluster_, kTableName);
 
+  SleepFor(MonoDelta::FromSeconds(10));
   // Deleting the created DB Stream ID.
-  ASSERT_EQ(DeleteCDCStream(stream_id), true);
+  ASSERT_EQ(DeleteCDCStream(stream_id), false);
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeXClusterStreamDelete)) {
@@ -1480,7 +1481,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeXClusterStream
   delete_req.add_stream_id(create_resp.stream_id());
   // The following line assumes that cdc_proxy_ has been initialized in the test already
   ASSERT_OK(cdc_proxy_->DeleteCDCStream(delete_req, &delete_resp, &delete_rpc));
-  ASSERT_EQ(!delete_resp.has_error(), true);
+  ASSERT_EQ(delete_resp.has_error(), true);
+  ASSERT_TRUE(delete_resp.error().status().message().find(create_resp.stream_id()) != string::npos);
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCheckPointPersistencyNodeRestart)) {
@@ -2846,16 +2848,16 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTab
   int idx = 0;
   vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(3);
 
-  for (auto ech_suffix : table_list_suffix) {
+  for (auto each_suffix : table_list_suffix) {
     table[idx] = ASSERT_RESULT(CreateTable(
-        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true, ech_suffix));
+        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true, each_suffix));
     ASSERT_OK(test_client()->GetTablets(
         table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
     TableId table_id =
-        ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName + ech_suffix));
+        ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName + each_suffix));
 
     ASSERT_OK(WriteEnumsRows(
-        0 /* start */, 100 /* end */, &test_cluster_, ech_suffix, kNamespaceName, kTableName));
+        0 /* start */, 100 /* end */, &test_cluster_, each_suffix, kNamespaceName, kTableName));
     idx += 1;
   }
   stream_id = ASSERT_RESULT(CreateDBStream());
