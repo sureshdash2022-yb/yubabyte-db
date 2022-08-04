@@ -1449,7 +1449,20 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeCDCStreamDelet
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
   DropTable(&test_cluster_, kTableName);
 
-  SleepFor(MonoDelta::FromSeconds(10));
+  // Drop table will trigger the background thread to start the stream metadata cleanup, here
+  // test case wait for the metadata cleanup to finish by the background thread.
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        while (true) {
+          auto resp = GetDBStreamInfo(stream_id);
+          if (resp.ok() && resp->has_error()) {
+            return true;
+          }
+          continue;
+        }
+        return false;
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
   // Deleting the created DB Stream ID.
   ASSERT_EQ(DeleteCDCStream(stream_id), false);
 }
@@ -2829,11 +2842,17 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupAndDropT
   ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
 
   DropTable(&test_cluster_, kTableName);
-  SleepFor(MonoDelta::FromSeconds(10));
-
-  auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id));
-  ASSERT_TRUE(get_resp.has_error());
-  ASSERT_EQ(get_resp.table_info_size(), 0);
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        while (true) {
+          auto get_resp = GetDBStreamInfo(stream_id);
+          // Wait until the background thread cleanup up the stream-id.
+          if (get_resp.ok() && get_resp->has_error() && get_resp->table_info_size() == 0) {
+            return true;
+          }
+        }
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
 }
 
 // Here we are creating multiple tables and a CDC stream on the same namespace.
@@ -2843,39 +2862,45 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTab
   // Setup cluster.
   ASSERT_OK(SetUpWithParams(3, 1, false));
   const vector<string> table_list_suffix = {"_1", "_2", "_3"};
-  vector<YBTableName> table(3);
+  const int kNumTables = 3;
+  vector<YBTableName> table(kNumTables);
   CDCStreamId stream_id;
   int idx = 0;
-  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(3);
+  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(kNumTables);
 
-  for (auto each_suffix : table_list_suffix) {
+  for (auto table_suffix : table_list_suffix) {
     table[idx] = ASSERT_RESULT(CreateTable(
-        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true, each_suffix));
+        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true, table_suffix));
     ASSERT_OK(test_client()->GetTablets(
         table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
     TableId table_id =
-        ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName + each_suffix));
+        ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName + table_suffix));
 
     ASSERT_OK(WriteEnumsRows(
-        0 /* start */, 100 /* end */, &test_cluster_, each_suffix, kNamespaceName, kTableName));
+        0 /* start */, 100 /* end */, &test_cluster_, table_suffix, kNamespaceName, kTableName));
     idx += 1;
   }
   stream_id = ASSERT_RESULT(CreateDBStream());
 
   // Drop one of the table from the namespace, check stream associated with namespace should not
   // be deleted, but metadata related to the droppped table should be cleaned up from the master.
-  for (int idx = 1; idx < 3; idx++) {
+  for (int idx = 1; idx < kNumTables; idx++) {
     char drop_table[64] = {0};
     (void)snprintf(drop_table, sizeof(drop_table), "%s_%d", kTableName, idx);
     DropTable(&test_cluster_, drop_table);
   }
 
-  SleepFor(MonoDelta::FromSeconds(10));
-  auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id));
-  ASSERT_FALSE(get_resp.has_error());
-
-  get_resp.table_info();
-  ASSERT_EQ(get_resp.table_info_size(), 1);
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        while (true) {
+          auto get_resp = GetDBStreamInfo(stream_id);
+          // Wait until the background thread cleanup up the drop table metadata.
+          if (get_resp.ok() && !get_resp->has_error() && get_resp->table_info_size() == 1) {
+            return true;
+          }
+        }
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
 
   for (int idx = 0; idx < 2; idx++) {
     auto change_resp = GetChangesFromCDC(stream_id, tablets[idx], nullptr);
@@ -2918,10 +2943,17 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpAndDeleteStr
   // Deleting the created DB Stream ID.
   ASSERT_TRUE(DeleteCDCStream(stream_id));
 
-  auto get_resp = GetDBStreamInfo(stream_id);
-  ASSERT_TRUE(get_resp.ok());
-  ASSERT_TRUE((*get_resp).has_error());
-  ASSERT_EQ((*get_resp).table_info_size(), 0);
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        while (true) {
+          auto get_resp = GetDBStreamInfo(stream_id);
+          // Wait until the background thread cleanup up the stream-id.
+          if (get_resp.ok() && get_resp->has_error() && get_resp->table_info_size() == 0) {
+            return true;
+          }
+        }
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
 }
 
 // Here we are creating a table test_table_1 and a CDC stream ex:- stream-id-1.
@@ -2958,22 +2990,29 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableAndDrop
     DropTable(&test_cluster_, drop_table);
   }
 
-  SleepFor(MonoDelta::FromSeconds(10));
-
-  for (int idx = 0; idx < 2; idx++) {
-    auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id[idx]));
-    // stream-1 is associated with single table, so as part table drop stream-1 is also cleaned.
-    if (idx == 0) {
-      ASSERT_TRUE(get_resp.has_error());
-      ASSERT_EQ(get_resp.table_info_size(), 0);
-
-    } else {
-      // stream-2 is associated both tables, so dropping one table, should not clean the stream from
-      // cache as well as from system catalog, except drop table metadata.
-      ASSERT_FALSE(get_resp.has_error());
-      ASSERT_EQ(get_resp.table_info_size(), 1);
-    }
-  }
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        int idx = 1;
+        while (idx <= 2) {
+          auto get_resp = GetDBStreamInfo(stream_id[idx -1]);
+          if (!get_resp.ok()) {
+            return false;
+          }
+          // stream-1 is associated with a single table, so as part of table drop, stream-1 should
+          // be cleaned and wait until the background thread is done with cleanup.
+          if (idx == 1 && false == get_resp->has_error() && get_resp->table_info_size() > 0) {
+            continue;
+          }
+          // stream-2 is associated with both tables, so dropping one table, should not clean the
+          // stream from cache as well as from system catalog, except the dropped table metadata.
+          if (idx > 1 && get_resp->table_info_size() > 1) {
+            continue;
+          }
+          idx += 1;
+        }
+        return true;
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableAndDeleteStream)) {
@@ -3002,22 +3041,30 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableAndDele
   // Deleting the stream-2 associated with both tables
   ASSERT_TRUE(DeleteCDCStream(stream_id[1]));
 
-  SleepFor(MonoDelta::FromSeconds(10));
-
-  for (int idx = 0; idx < 2; idx++) {
-    auto get_resp = ASSERT_RESULT(GetDBStreamInfo(stream_id[idx]));
-    // stream-1 is not deleted, so there should not be any cleanup for it.
-    if (idx == 0) {
-      ASSERT_FALSE(get_resp.has_error());
-      ASSERT_EQ(get_resp.table_info_size(), 1);
-
-    } else {
-      // stream-2 is deleted, so it's metadata from master cache as well as from system catalog need
-      // to be cleaned.
-      ASSERT_TRUE(get_resp.has_error());
-      ASSERT_EQ(get_resp.table_info_size(), 0);
-    }
-  }
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        int idx = 1;
+        while (idx <= 2) {
+          auto get_resp = GetDBStreamInfo(stream_id[idx - 1]);
+          if (!get_resp.ok()) {
+            return false;
+          }
+          // stream-1 which is not deleted, so there should not be any cleanup
+          // for it.
+          if (idx == 1 && get_resp->table_info_size() != 1) {
+            continue;
+          }
+          // stream-2 is deleted, so its metadata from the master cache as well as from the system
+          // catalog should be cleaned and wait until the background thread is done with the
+          // cleanup.
+          if (idx > 1 && (false == get_resp->has_error() || get_resp->table_info_size() != 0)) {
+            continue;
+          }
+          idx += 1;
+        }
+        return true;
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
 }
 
 }  // namespace enterprise
