@@ -3246,8 +3246,7 @@ std::vector<scoped_refptr<CDCStreamInfo>> CatalogManager::FindCDCStreamsForTable
     auto ltm = entry.second->LockForRead();
     uint32_t table_list_size = ltm->table_id().size();
     for (uint32_t i = 0; i < table_list_size; i++) {
-      if (ltm->table_id().Get(i) == table_id && !ltm->is_deleting_metadata() &&
-          !ltm->namespace_id().empty()) {
+      if (ltm->table_id().Get(i) == table_id && !ltm->is_deleting_metadata()) {
         streams.push_back(entry.second);
       }
     }
