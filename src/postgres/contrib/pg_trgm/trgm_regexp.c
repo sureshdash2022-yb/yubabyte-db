@@ -2190,10 +2190,10 @@ printSourceNFA(regex_t *regex, TrgmColorInfo *colors, int ncolors)
 		/* dot -Tpng -o /tmp/source.png < /tmp/source.dot */
 		FILE *fp = NULL;
 		char *tmp_str = palloc0(MAX_STRING_LEN);
-		if (yb_inflight_path)
+		if (Yb_inflight_directory)
 		{
 			snprintf(tmp_str, MAX_STRING_LEN, "%s/source.dot",
-					 yb_inflight_path);
+					 Yb_inflight_directory);
 			fp = fopen(tmp_str, "w");
 		}
 		else
@@ -2264,11 +2264,11 @@ printTrgmNFA(TrgmNFA *trgmNFA)
 		/* dot -Tpng -o /tmp/transformed.png < /tmp/transformed.dot */
 		char *tmp_str = NULL;
 		FILE *fp = NULL;
-		if (yb_inflight_path != NULL)
+		if (Yb_inflight_directory != NULL)
 		{
 			tmp_str = palloc0(MAX_STRING_LEN);
 			snprintf(tmp_str, MAX_STRING_LEN,
-					 "%s/transformed.dot" yb_inflight_path);
+					 "%s/transformed.dot" Yb_inflight_directory);
 			fp = fopen(tmp_str, "w");
 		}
 		else
@@ -2368,11 +2368,11 @@ printTrgmPackedGraph(TrgmPackedGraph *packedGraph, TRGM *trigrams)
 		/* dot -Tpng -o /tmp/packed.png < /tmp/packed.dot */
 		FILE *fp = NULL;
 		char *tmp_str = NULL;
-		if (yb_inflight_path != NULL)
+		if (Yb_inflight_directory != NULL)
 		{
 			tmp_str = palloc0(MAX_STRING_LEN);
 			snprintf(tmp_str, MAX_STRING_LEN, "%s/packed.dot",
-					 yb_inflight_path);
+					 Yb_inflight_directory);
 			fp = fopen(tmp_str, "w");
 		}
 		else

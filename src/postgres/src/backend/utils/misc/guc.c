@@ -4129,7 +4129,7 @@ static struct config_string ConfigureNamesString[] =
 			NULL,
 			GUC_SUPERUSER_ONLY
 		},
-		&yb_inflight_path,
+		&Yb_inflight_directory,
 		NULL,
 		NULL, NULL, NULL
 	},

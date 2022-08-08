@@ -224,7 +224,8 @@ _PG_init(void)
 	{
 		char file_name[1024];
 		snprintf(file_name, 1024, "%s.%d",
-				 yb_inflight_path == NULL ? PGSM_TEXT_FILE : yb_inflight_path,
+				 Yb_inflight_directory == NULL ? PGSM_TEXT_FILE :
+												 Yb_inflight_directory,
 				 i);
 		unlink(file_name);
 	}
@@ -1702,7 +1703,8 @@ get_next_wbucket(pgssSharedState *pgss)
 		hash_entry_dealloc(bucket_id);
 		hash_query_entry_dealloc(bucket_id);
 		snprintf(file_name, 1024, "%s.%d",
-				 yb_inflight_path == NULL ? PGSM_TEXT_FILE : yb_inflight_path,
+				 Yb_inflight_directory == NULL ? PGSM_TEXT_FILE :
+												 Yb_inflight_directory,
 				 (int) bucket_id);
 		unlink(file_name);
 
@@ -2891,7 +2893,8 @@ dump_queries_buffer(int bucket_id, unsigned char *buf, int buf_len)
 	char file_name[1024];
 
 	snprintf(file_name, 1024, "%s.%d",
-			 yb_inflight_path == NULL ? PGSM_TEXT_FILE : yb_inflight_path,
+			 Yb_inflight_directory == NULL ? PGSM_TEXT_FILE :
+											 Yb_inflight_directory,
 			 bucket_id);
 	fd = OpenTransientFile(file_name, O_RDWR | O_CREAT | O_APPEND | PG_BINARY);
     if (fd < 0)
@@ -2919,7 +2922,8 @@ read_query_buffer(int bucket_id, uint64 queryid, char *query_txt)
 	int           off = 0;
 
 	snprintf(file_name, 1024, "%s.%d",
-			 yb_inflight_path == NULL ? PGSM_TEXT_FILE : yb_inflight_path,
+			 Yb_inflight_directory == NULL ? PGSM_TEXT_FILE :
+											 Yb_inflight_directory,
 			 bucket_id);
 	fd = OpenTransientFile(file_name, O_RDONLY | PG_BINARY);
 	if (fd < 0)
