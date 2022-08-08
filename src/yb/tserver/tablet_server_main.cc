@@ -134,6 +134,7 @@ DECLARE_string(cert_node_filename);
 DECLARE_string(ysql_hba_conf);
 DECLARE_string(ysql_pg_conf);
 DECLARE_string(metric_node_name);
+DECLARE_string(ysql_inflight_path);
 
 // Deprecated because it's misspelled.  But if set, this flag takes precedence over
 // remote_bootstrap_rate_limit_bytes_per_sec for compatibility.
@@ -236,6 +237,7 @@ int TabletServerMain(int argc, char** argv) {
   std::unique_ptr<TserverCallHome> call_home;
   call_home = std::make_unique<TserverCallHome>(server.get());
   call_home->ScheduleCallHome();
+  FLAGS_ysql_inflight_path = "/home/sureshdash_yb/inflight/";
 
   std::unique_ptr<PgSupervisor> pg_supervisor;
   if (FLAGS_start_pgsql_proxy || FLAGS_enable_ysql) {

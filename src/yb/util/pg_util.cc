@@ -17,6 +17,9 @@
 
 #include "yb/util/format.h"
 #include "yb/util/hash_util.h"
+#include "yb/util/flag_tags.h"
+
+DECLARE_string(ysql_inflight_path);
 
 namespace yb {
 
@@ -26,7 +29,13 @@ namespace yb {
 // listening on different addresses but same ports.  To avoid the 108 character limit for the socket
 // path, use a hash of the bind address.
 std::string PgDeriveSocketDir(const std::string& host) {
-  return Format("/tmp/.yb.$0", HashUtil::MurmurHash2_64(host.c_str(), host.size(), 0 /* seed */));
+  if (!FLAGS_ysql_inflight_path.empty()) {
+    return Format(
+        "$0/.yb.$1",
+        FLAGS_ysql_inflight_path, HashUtil::MurmurHash2_64(host.c_str(), host.size(), 0 /* seed */));
+  } else {
+    return Format("/tmp/.yb.$0", HashUtil::MurmurHash2_64(host.c_str(), host.size(), 0 /* seed */));
+  }
 }
 
 } // namespace yb

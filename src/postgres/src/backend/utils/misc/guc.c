@@ -4123,6 +4123,21 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		/*
+		 * Can't be set by ALTER SYSTEM as it can lead to recursive definition
+		 * of data_directory.
+		 */
+		{"ysql_inflight_path", PGC_POSTMASTER, FILE_LOCATIONS,
+			gettext_noop("Sets the YB inflight path directory."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&yb_inflight_path,
+		NULL,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"config_file", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Sets the server's main configuration file."),
 			NULL,
@@ -11614,7 +11629,7 @@ check_maxconnections(int *newval, void **extra, GucSource source)
 
 /*
  * For YB-managed (cloud), the cloud user won't be aware of superuser.
- * When YB shows max_connections, the connections reserved for superusers (and 
+ * When YB shows max_connections, the connections reserved for superusers (and
  * other backends) are hidden from cloud users.
  * The reference of the relations can be found in postmaster.c.
  */
