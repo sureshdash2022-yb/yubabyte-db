@@ -18,6 +18,7 @@
 #include "commands/explain.h"
 #include "pg_stat_monitor.h"
 #include "yb/server/pgsql_webserver_wrapper.h"
+#include "postmaster/syslogger.h"
 
 PG_MODULE_MAGIC;
 
@@ -222,7 +223,9 @@ _PG_init(void)
 	for (i = 0; i < PGSM_MAX_BUCKETS; i++)
 	{
 		char file_name[1024];
-		snprintf(file_name, 1024, "%s.%d", PGSM_TEXT_FILE, i);
+		snprintf(file_name, 1024, "%s.%d",
+				 yb_inflight_path == NULL ? PGSM_TEXT_FILE : yb_inflight_path,
+				 i);
 		unlink(file_name);
 	}
 
@@ -1698,7 +1701,9 @@ get_next_wbucket(pgssSharedState *pgss)
 		buf = pgss_qbuf[bucket_id];
 		hash_entry_dealloc(bucket_id);
 		hash_query_entry_dealloc(bucket_id);
-		snprintf(file_name, 1024, "%s.%d", PGSM_TEXT_FILE, (int)bucket_id);
+		snprintf(file_name, 1024, "%s.%d",
+				 yb_inflight_path == NULL ? PGSM_TEXT_FILE : yb_inflight_path,
+				 (int) bucket_id);
 		unlink(file_name);
 
 		/* reset the query buffer */
@@ -2885,7 +2890,9 @@ dump_queries_buffer(int bucket_id, unsigned char *buf, int buf_len)
     int  fd = 0;
 	char file_name[1024];
 
-	snprintf(file_name, 1024, "%s.%d", PGSM_TEXT_FILE, bucket_id);
+	snprintf(file_name, 1024, "%s.%d",
+			 yb_inflight_path == NULL ? PGSM_TEXT_FILE : yb_inflight_path,
+			 bucket_id);
 	fd = OpenTransientFile(file_name, O_RDWR | O_CREAT | O_APPEND | PG_BINARY);
     if (fd < 0)
 		ereport(LOG,
@@ -2911,8 +2918,10 @@ read_query_buffer(int bucket_id, uint64 queryid, char *query_txt)
 	unsigned char *buf = NULL;
 	int           off = 0;
 
-	snprintf(file_name, 1024, "%s.%d", PGSM_TEXT_FILE, bucket_id);
-    fd = OpenTransientFile(file_name, O_RDONLY | PG_BINARY);
+	snprintf(file_name, 1024, "%s.%d",
+			 yb_inflight_path == NULL ? PGSM_TEXT_FILE : yb_inflight_path,
+			 bucket_id);
+	fd = OpenTransientFile(file_name, O_RDONLY | PG_BINARY);
 	if (fd < 0)
 		goto exit;
 

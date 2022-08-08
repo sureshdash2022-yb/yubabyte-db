@@ -69,7 +69,7 @@
 
 DECLARE_bool(enable_process_lifetime_heap_profiling);
 DECLARE_string(heap_profile_path);
-
+DECLARE_string(yb_inflight_path);
 
 using std::endl;
 using std::ifstream;
@@ -151,7 +151,13 @@ static void PprofCpuProfileHandler(const Webserver::WebRequest& req,
     seconds = atoi(it->second.c_str());
   }
   // Build a temporary file name that is hopefully unique.
-  string tmp_prof_file_name = strings::Substitute("/tmp/yb_cpu_profile.$0.$1", getpid(), rand());
+  string tmp_prof_file_name;
+  if (!FLAGS_yb_inflight_path.empty()) {
+    tmp_prof_file_name =
+        strings::Substitute("$0/yb_cpu_profile.$1.$2", FLAGS_yb_inflight_path, getpid(), rand());
+  } else {
+    tmp_prof_file_name = strings::Substitute("/tmp/yb_cpu_profile.$0.$1", getpid(), rand());
+  }
 
   LOG(INFO) << "Starting a cpu profile:"
             << " profiler file name=" << tmp_prof_file_name

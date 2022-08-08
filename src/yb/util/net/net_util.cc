@@ -85,12 +85,8 @@ DEFINE_string(
     "prefer external IPv4 "
     "addresses first. Other options include ipv6_external,ipv6_non_link_local");
 
-DEFINE_string(
-    ysql_inflight_path, "",
-    "Temporary path to maintain temporary rquired file for database. If not set "
-    " temporary files are stored in /tmp/.");
-TAG_FLAG(ysql_inflight_path, stable);
-TAG_FLAG(ysql_inflight_path, advanced);
+
+DECLARE_string(yb_inflight_path);
 
 namespace yb {
 
@@ -547,15 +543,15 @@ uint16_t GetFreePort(std::unique_ptr<FileLock>* file_lock) {
   Env* env = Env::Default();
   bool created = false;
   string lock_file_dir;
-  //FLAGS_ysql_inflight_path = "/home/sureshdash_yb/inflight/";
-  if (!FLAGS_ysql_inflight_path.empty()) {
+
+  if (!FLAGS_yb_inflight_path.empty()) {
     Result<bool> dir_exists =
-        Env::Default()->DoesDirectoryExist(FLAGS_ysql_inflight_path);
+        Env::Default()->DoesDirectoryExist(FLAGS_yb_inflight_path);
     if (!dir_exists.ok()) {
-      LOG(FATAL) << "Path doesnot exist " << FLAGS_ysql_inflight_path << " : "
+      LOG(FATAL) << "Path doesnot exist " << FLAGS_yb_inflight_path << " : "
                  << dir_exists.status().ToString();
     }
-    lock_file_dir = Format("$0/yb-port-locks", FLAGS_ysql_inflight_path);
+    lock_file_dir = Format("$0/yb-port-locks", FLAGS_yb_inflight_path);
   } else {
     lock_file_dir = "/tmp/yb-port-locks";
   }

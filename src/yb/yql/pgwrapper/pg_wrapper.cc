@@ -96,7 +96,7 @@ DEFINE_string(ysql_hba_conf, "",
               "Deprecated, use `ysql_hba_conf_csv` flag instead. " \
               "Comma separated list of postgres hba rules (in order)");
 TAG_FLAG(ysql_hba_conf, sensitive_info);
-DECLARE_string(ysql_inflight_path);
+DECLARE_string(yb_inflight_path);
 
 using std::vector;
 using std::string;
@@ -424,15 +424,15 @@ Status PgWrapper::Start() {
     argv.push_back("log_error_verbosity=VERBOSE");
   }
 
-    if (!FLAGS_ysql_inflight_path.empty()) {
-      Result<bool> dir_exists = Env::Default()->DoesDirectoryExist(FLAGS_ysql_inflight_path);
+    if (!FLAGS_yb_inflight_path.empty()) {
+      Result<bool> dir_exists = Env::Default()->DoesDirectoryExist(FLAGS_yb_inflight_path);
       if (!dir_exists.ok()) {
         return STATUS_FORMAT(
-            IOError, "Path doesnot exist $0 status: $1", FLAGS_ysql_inflight_path,
+            IOError, "Path doesnot exist $0 status: $1", FLAGS_yb_inflight_path,
             dir_exists.status().ToString());
       }
       argv.push_back("-c");
-      argv.push_back("ysql_inflight_path=" + FLAGS_ysql_inflight_path);
+      argv.push_back("yb_inflight_path=" + FLAGS_yb_inflight_path);
     }
 
   pg_proc_.emplace(postgres_executable, argv);

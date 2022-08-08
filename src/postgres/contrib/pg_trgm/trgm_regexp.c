@@ -2188,9 +2188,21 @@ printSourceNFA(regex_t *regex, TrgmColorInfo *colors, int ncolors)
 
 	{
 		/* dot -Tpng -o /tmp/source.png < /tmp/source.dot */
-		FILE	   *fp = fopen("/tmp/source.dot", "w");
+		FILE *fp = NULL;
+		char *tmp_str = palloc0(MAX_STRING_LEN);
+		if (yb_inflight_path)
+		{
+			snprintf(tmp_str, MAX_STRING_LEN, "%s/source.dot",
+					 yb_inflight_path);
+			fp = fopen(tmp_str, "w");
+		}
+		else
+		{
+			fp = fopen("/tmp/source.dot", "w");
+		}
 
 		fprintf(fp, "%s", buf.data);
+		pfree(tmp_str);
 		fclose(fp);
 	}
 
@@ -2250,9 +2262,22 @@ printTrgmNFA(TrgmNFA *trgmNFA)
 
 	{
 		/* dot -Tpng -o /tmp/transformed.png < /tmp/transformed.dot */
-		FILE	   *fp = fopen("/tmp/transformed.dot", "w");
+		char *tmp_str = NULL;
+		FILE *fp = NULL;
+		if (yb_inflight_path != NULL)
+		{
+			tmp_str = palloc0(MAX_STRING_LEN);
+			snprintf(tmp_str, MAX_STRING_LEN,
+					 "%s/transformed.dot" yb_inflight_path);
+			fp = fopen(tmp_str, "w");
+		}
+		else
+		{
+			fp = fopen("/tmp/transformed.dot", "w");
+		}
 
 		fprintf(fp, "%s", buf.data);
+		pfree(tmp_str);
 		fclose(fp);
 	}
 
@@ -2341,10 +2366,23 @@ printTrgmPackedGraph(TrgmPackedGraph *packedGraph, TRGM *trigrams)
 
 	{
 		/* dot -Tpng -o /tmp/packed.png < /tmp/packed.dot */
-		FILE	   *fp = fopen("/tmp/packed.dot", "w");
+		FILE *fp = NULL;
+		char *tmp_str = NULL;
+		if (yb_inflight_path != NULL)
+		{
+			tmp_str = palloc0(MAX_STRING_LEN);
+			snprintf(tmp_str, MAX_STRING_LEN, "%s/packed.dot",
+					 yb_inflight_path);
+			fp = fopen(tmp_str, "w");
+		}
+		else
+		{
+			fp = fopen("/tmp/packed.dot", "w");
+		}
 
 		fprintf(fp, "%s", buf.data);
 		fclose(fp);
+		pfree(tmp_str);
 	}
 
 	pfree(buf.data);

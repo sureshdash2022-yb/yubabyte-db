@@ -93,6 +93,13 @@ DEFINE_bool(help_auto_flag_json, false,
 TAG_FLAG(help_auto_flag_json, stable);
 TAG_FLAG(help_auto_flag_json, advanced);
 
+DEFINE_string(
+    yb_inflight_path, "",
+    "Path to maintain the temporary required file for the database. If not set "
+    " temporary files are stored in /tmp/.");
+TAG_FLAG(yb_inflight_path, stable);
+TAG_FLAG(yb_inflight_path, advanced);
+
 DECLARE_bool(TEST_promote_all_auto_flags);
 
 // Tag a bunch of the flags that we inherit from glog/gflags.
@@ -380,8 +387,13 @@ int ParseCommandLineFlags(int* argc, char*** argv, bool remove_flags) {
   }
 
   if (FLAGS_heap_profile_path.empty()) {
-    FLAGS_heap_profile_path = strings::Substitute(
-        "/tmp/$0.$1", google::ProgramInvocationShortName(), getpid());
+    if (!FLAGS_yb_inflight_path.empty()) {
+      FLAGS_heap_profile_path = strings::Substitute(
+          "$0/$1.$2", FLAGS_yb_inflight_path, google::ProgramInvocationShortName(), getpid());
+    } else {
+      FLAGS_heap_profile_path =
+          strings::Substitute("/tmp/$0.$1", google::ProgramInvocationShortName(), getpid());
+    }
   }
 
 #ifdef TCMALLOC_ENABLED

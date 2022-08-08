@@ -4123,11 +4123,8 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		/*
-		 * Can't be set by ALTER SYSTEM as it can lead to recursive definition
-		 * of data_directory.
-		 */
-		{"ysql_inflight_path", PGC_POSTMASTER, FILE_LOCATIONS,
+
+		{"yb_inflight_path", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Sets the YB inflight path directory."),
 			NULL,
 			GUC_SUPERUSER_ONLY
