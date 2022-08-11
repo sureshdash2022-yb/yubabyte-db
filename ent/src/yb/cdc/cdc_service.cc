@@ -1286,7 +1286,8 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     }
     return;
   }
-  LOG(INFO) << "suresh: calling Getchanges for the tablet_id: " << req->tablet_id() << " stream_id: " << stream_id;
+  LOG(INFO) << "suresh: calling Getchanges for the tablet_id: " << req->tablet_id()
+            << " stream_id: " << stream_id;
   auto res = GetStream(stream_id);
   RPC_CHECK_AND_RETURN_ERROR(res.ok(), res.status(), resp->mutable_error(),
                              CDCErrorPB::INTERNAL_ERROR, context);
