@@ -589,6 +589,15 @@ class CDCServiceImpl::Impl {
     return Status::OK();
   }
 
+  Status TEST_CheckStreamExist(const ProducerTabletInfo& producer_tablet) {
+    SharedLock<rw_spinlock> l(mutex_);
+    auto it = tablet_checkpoints_.find(producer_tablet);
+    if (it != tablet_checkpoints_.end()) {
+      return Status::OK();
+    }
+    return STATUS_FORMAT(InternalError, "Not found in cache.");
+  }
+
   void UpdateActiveTime(const ProducerTabletInfo& producer_tablet) {
     SharedLock<rw_spinlock> l(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
@@ -1206,6 +1215,10 @@ Result<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> CDCService
   return all_tablets;
 }
 
+Status CDCServiceImpl::TEST_SearchFromCDCSeriveCache(const ProducerTabletInfo& producer_tablet) {
+  return impl_->TEST_CheckStreamExist(producer_tablet);
+}
+
 void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
                                 GetChangesResponsePB* resp,
                                 RpcContext context) {
@@ -1273,7 +1286,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     }
     return;
   }
-
+  LOG(INFO) << "suresh: calling Getchanges for the tablet_id: " << req->tablet_id() << " stream_id: " << stream_id;
   auto res = GetStream(stream_id);
   RPC_CHECK_AND_RETURN_ERROR(res.ok(), res.status(), resp->mutable_error(),
                              CDCErrorPB::INTERNAL_ERROR, context);
