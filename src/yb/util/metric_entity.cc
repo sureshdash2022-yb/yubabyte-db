@@ -283,6 +283,7 @@ Status MetricEntity::WriteForPrometheus(PrometheusWriter* writer,
     attrs = attributes_;
     external_metrics_cbs = external_prometheus_metrics_cbs_;
     for (const auto& [prototype, metric] : metric_map_) {
+      //LOG(INFO) << "suresh: Inside WriteForPrometheus ...... prototype: " << prototype->name();
       if (select_all || MatchMetricInList(prototype->name(), requested_metrics)) {
         InsertOrDie(&metrics, prototype->name(), metric);
       }
@@ -296,7 +297,7 @@ Status MetricEntity::WriteForPrometheus(PrometheusWriter* writer,
   if (!requested_metrics.empty() && !select_all && metrics.empty()) {
     return Status::OK();
   }
-
+  LOG(INFO) << "suresh: type of prototype it's belonging: " << prototype_->name();
   AttributeMap prometheus_attr;
   // Per tablet metrics come with tablet_id, as well as table_id and table_name attributes.
   // We ignore the tablet part to squash at the table level.

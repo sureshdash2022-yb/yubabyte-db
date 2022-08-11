@@ -49,6 +49,7 @@ Status PrometheusWriter::FlushAggregatedValues(
 Status PrometheusWriter::FlushSingleEntry(
     const MetricEntity::AttributeMap& attr,
     const std::string& name, const int64_t value) {
+  LOG(INFO) << "suresh: name: " << name << " value: " << value;
   *output_ << name;
   size_t total_elements = attr.size();
   if (total_elements > 0) {
@@ -75,7 +76,10 @@ Status PrometheusWriter::WriteSingleEntry(
     const MetricEntity::AttributeMap& attr, const std::string& name, int64_t value,
     AggregationFunction aggregation_function) {
   auto it = attr.find("table_id");
+  //LOG(INFO) << "suresh: name: " << name << " value: " << value;
+
   if (it == attr.end()) {
+    //LOG(INFO) << "suresh: name: " << name << " value: " << value;
     return FlushSingleEntry(attr, name, value);
   }
 
@@ -87,6 +91,8 @@ Status PrometheusWriter::WriteSingleEntry(
     table_it->second.values.emplace(name, value);
   } else {
     auto& stored_value = table_it->second.values[name];
+    LOG(INFO) << "suresh: for name: " << name << "  stored_value: " << stored_value;
+
     switch (aggregation_function) {
       case kSum:
         stored_value += value;
