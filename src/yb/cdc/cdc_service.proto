@@ -52,6 +52,8 @@ service CDCService {
   rpc GetCheckpoint (GetCheckpointRequestPB) returns (GetCheckpointResponsePB);
   rpc UpdateCdcReplicatedIndex (UpdateCdcReplicatedIndexRequestPB)
       returns (UpdateCdcReplicatedIndexResponsePB);
+  rpc UpdateCdcStreamActiveTime (UpdateCdcStreamActiveTimeRequestPB)
+      returns (UpdateCdcStreamActiveTimeResponsePB);
   rpc BootstrapProducer (BootstrapProducerRequestPB) returns (BootstrapProducerResponsePB);
   rpc GetLatestEntryOpId (GetLatestEntryOpIdRequestPB) returns (GetLatestEntryOpIdResponsePB);
   rpc GetCDCDBStreamInfo (GetCDCDBStreamInfoRequestPB) returns (GetCDCDBStreamInfoResponsePB);
@@ -397,6 +399,15 @@ message GetCheckpointRequestPB {
 message GetCheckpointResponsePB {
   optional CDCErrorPB error = 1;
   optional CDCCheckpointPB checkpoint = 2;
+}
+
+message UpdateCdcStreamActiveTimeRequestPB {
+  optional bytes stream_id = 1;
+  optional bytes tablet_id = 2;
+}
+
+message UpdateCdcStreamActiveTimeResponsePB {
+  optional CDCErrorPB error = 1;
 }
 
 message UpdateCdcReplicatedIndexRequestPB {

@@ -127,6 +127,10 @@ class CDCServiceImpl : public CDCServiceIf {
                                 UpdateCdcReplicatedIndexResponsePB* resp,
                                 rpc::RpcContext rpc) override;
 
+  void UpdateCdcStreamActiveTime(
+      const UpdateCdcStreamActiveTimeRequestPB* req, UpdateCdcStreamActiveTimeResponsePB* resp,
+      rpc::RpcContext rpc) override;
+
   void GetLatestEntryOpId(const GetLatestEntryOpIdRequestPB* req,
                           GetLatestEntryOpIdResponsePB* resp,
                           rpc::RpcContext context) override;
@@ -269,6 +273,8 @@ class CDCServiceImpl : public CDCServiceIf {
   Status UpdatePeersCdcMinReplicatedIndex(
       const TabletId& tablet_id,
       const TabletCDCCheckpointInfo& cdc_checkpoint_min);
+
+  Status UpdatePeersStreamActiveTime(const TabletId& tablet_id, const CDCStreamId& stream_idx);
 
   // Used as a callback function for parallelizing async cdc rpc calls.
   // Given a finished tasks counter, and the number of total rpc calls

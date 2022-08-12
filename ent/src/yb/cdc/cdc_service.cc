@@ -572,6 +572,15 @@ class CDCServiceImpl::Impl {
     return it->cdc_state_checkpoint.last_active_time;
   }
 
+   void UpdateStreamActiveTime(const ProducerTabletInfo& producer_tablet) {
+    SharedLock<rw_spinlock> l(mutex_);
+    auto it = tablet_checkpoints_.find(producer_tablet);
+
+    if (it != tablet_checkpoints_.end()) {
+      it->cdc_state_checkpoint.last_active_time = CoarseMonoClock::Now();
+    }
+  }
+
   Status CheckStreamActive(const ProducerTabletInfo& producer_tablet) {
     SharedLock<rw_spinlock> l(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
@@ -581,6 +590,12 @@ class CDCServiceImpl::Impl {
           CoarseMonoClock::Now() >
               it->cdc_state_checkpoint.last_active_time +
                   MonoDelta::FromMilliseconds(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms))) {
+        LOG(ERROR) << "stream ID: " << producer_tablet.stream_id
+                   << "is expired for Tablet ID: " << producer_tablet.tablet_id
+                   << " with last active time: "
+                   << it->cdc_state_checkpoint.last_active_time.time_since_epoch()
+                   << " retention time in ms: "
+                   << MonoDelta::FromMilliseconds(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms));
         return STATUS_FORMAT(
             InternalError, "stream ID $0 is expired for Tablet ID $1", producer_tablet.stream_id,
             producer_tablet.tablet_id);
@@ -1451,6 +1466,33 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
   context.RespondSuccess();
 }
 
+Status CDCServiceImpl::UpdatePeersStreamActiveTime(
+    const TabletId& tablet_id, const CDCStreamId& stream_id) {
+  std::vector<client::internal::RemoteTabletServer*> servers;
+  RETURN_NOT_OK(GetTServers(tablet_id, &servers));
+  for (const auto& server : servers) {
+    if (server->IsLocal()) {
+      // We modify our log directly. Avoid calling itself through the proxy.
+      continue;
+    }
+    VLOG(1) << "Modifying remote peer active time" << server->ToString();
+    auto proxy = GetCDCServiceProxy(server);
+    UpdateCdcStreamActiveTimeRequestPB update_active_time_req;
+    UpdateCdcStreamActiveTimeResponsePB update_active_time_resp;
+    rpc::RpcController rpc;
+    rpc.set_timeout(MonoDelta::FromMilliseconds(FLAGS_cdc_write_rpc_timeout_ms));
+    update_active_time_req.set_stream_id(stream_id);
+    update_active_time_req.set_tablet_id(tablet_id);
+
+    RETURN_NOT_OK(
+        proxy->UpdateCdcStreamActiveTime(update_active_time_req, &update_active_time_resp, &rpc));
+    if (update_active_time_resp.has_error()) {
+      return StatusFromPB(update_active_time_resp.error().status());
+    }
+  }
+  return Status::OK();
+}
+
 Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
     const TabletId& tablet_id, const TabletCDCCheckpointInfo& cdc_checkpoint_min) {
   std::vector<client::internal::RemoteTabletServer *> servers;
@@ -1827,6 +1869,18 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
         continue;
       }
       latest_active_time = impl_->GetLatestActiveTime(producer_tablet, *result);
+      // if current tsever is the tablet LEADER, send the FOLLOWER tablets to
+      // update their active_time in their CDCService Cache.
+      std::shared_ptr<tablet::TabletPeer> tablet_peer;
+      Status s = tablet_manager_->GetTabletPeer(tablet_id, &tablet_peer);
+      if (s.ok() && IsTabletPeerLeader(tablet_peer)) {
+        VLOG(1) << "Tablet peer " << tablet_peer->permanent_uuid()
+                << " is not the leader for tablet " << tablet_id;
+        WARN_NOT_OK(
+            UpdatePeersStreamActiveTime(tablet_id, stream_id),
+            "Unable to update stream active time for FOLLOWERS of tablet_id: " + tablet_id +
+                " stream_id: " + stream_id);
+      }
     }
 
     // Ignoring those non-bootstarped CDCSDK stream
@@ -2185,6 +2239,32 @@ void CDCServiceImpl::GetCheckpoint(const GetCheckpointRequestPB* req,
                              CDCErrorPB::INTERNAL_ERROR, context);
 
   result->ToPB(resp->mutable_checkpoint()->mutable_op_id());
+  context.RespondSuccess();
+}
+
+void CDCServiceImpl::UpdateCdcStreamActiveTime(
+    const UpdateCdcStreamActiveTimeRequestPB* req, UpdateCdcStreamActiveTimeResponsePB* resp,
+    rpc::RpcContext context) {
+  if (!CheckOnline(req, resp, &context)) {
+    return;
+  }
+  RPC_CHECK_AND_RETURN_ERROR(
+      req->has_tablet_id(),
+      STATUS(InvalidArgument, "Tablet ID is required to update the active time in FOLLOWER."),
+      resp->mutable_error(),
+      CDCErrorPB::INVALID_REQUEST,
+      context);
+  RPC_CHECK_AND_RETURN_ERROR(
+      req->has_stream_id(),
+      STATUS(InvalidArgument, "Stream ID is required to update the active time in FOLLOWER."),
+      resp->mutable_error(),
+      CDCErrorPB::INVALID_REQUEST,
+      context);
+
+  ProducerTabletInfo producer_tablet;
+  producer_tablet = {"" /* UUID */, req->stream_id(), req->tablet_id()};
+  LOG(INFO) << "suresh: update the stream active time for: " << producer_tablet.ToString();
+  impl_->UpdateActiveTime(producer_tablet);
   context.RespondSuccess();
 }
 
