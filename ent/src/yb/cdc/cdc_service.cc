@@ -585,6 +585,9 @@ class CDCServiceImpl::Impl {
             InternalError, "stream ID $0 is expired for Tablet ID $1", producer_tablet.stream_id,
             producer_tablet.tablet_id);
       }
+      VLOG(1) << "Tablet  :" << producer_tablet.ToString()
+              << " found in CDCSerive Cache with active time: "
+              << ": " << it->cdc_state_checkpoint.last_active_time.time_since_epoch();
     }
     return Status::OK();
   }
@@ -593,6 +596,7 @@ class CDCServiceImpl::Impl {
     SharedLock<rw_spinlock> l(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
     if (it != tablet_checkpoints_.end()) {
+      LOG(INFO) << "suresh: There is a cache hit for: " << producer_tablet.ToString();
       return Status::OK();
     }
     return STATUS_FORMAT(InternalError, "Not found in cache.");

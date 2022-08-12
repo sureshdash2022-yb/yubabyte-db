@@ -3098,6 +3098,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
   ASSERT_GE(record_size, 100);
   LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
 
+  // check the CDC Service Cache of all the tservers.
   for (uint32_t i = 0; i < num_tservers; ++i) {
     const auto& tserver = test_cluster()->mini_tablet_server(i)->server();
     auto cdc_service = dynamic_cast<CDCServiceImpl*>(
@@ -3114,11 +3115,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
                 << " does not mentain the cache info for: " << tablets[0].table_id();
     }
   }
-  SleepFor(MonoDelta::FromMilliseconds(FLAGS_cdc_intent_retention_ms * 2));
-
-  auto result = GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint());
-  LOG(INFO) << "suresh: has expire error: " << result.ok();
-  // change LEADER of the tablet
+  // change LEADER of the tablet to tserver-2
   string tool_path = GetToolPath("../bin", "yb-admin");
   LOG(INFO) << "suresh: yb-admin path: " << tool_path;
   vector<string> argv;
@@ -3148,6 +3145,26 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
                 << " does not mentain the cache info for: " << tablets[0].table_id();
     }
   }
+  // sleep for some time, so that active time in tserver-1 is beyond the
+  // the expiration time.
+  SleepFor(MonoDelta::FromMilliseconds(FLAGS_cdc_intent_retention_ms * 2));
+
+  // change LEADER of the tablet to tserver-1
+  tool_path = GetToolPath("../bin", "yb-admin");
+  LOG(INFO) << "suresh: yb-admin path: " << tool_path;
+  argv.clear();
+  argv.push_back(tool_path);
+  argv.push_back("-master_addresses");
+  argv.push_back(AsString(test_cluster_.mini_cluster_->mini_master(0)->bound_rpc_addr()));
+  argv.push_back("leader_stepdown");
+  argv.push_back(tablets[0].tablet_id());
+  argv.push_back(test_cluster()->mini_tablet_server(0)->server()->permanent_uuid());
+  ASSERT_OK(Subprocess::Call(argv));
+
+  auto result = GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint());
+  if (!result.ok()) {
+    LOG(INFO) << "suresh: has expire error: " << result.status();
+  }
 
   // restart the tservers
   for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
@@ -3155,7 +3172,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
     ASSERT_OK(test_cluster()->mini_tablet_server(i)->Start());
     ASSERT_OK(test_cluster()->mini_tablet_server(i)->WaitStarted());
   }
-
   // All cache should be in clean state.
   for (uint32_t i = 0; i < num_tservers; ++i) {
     const auto& tserver = test_cluster()->mini_tablet_server(i)->server();
@@ -3177,7 +3193,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
   GetChangesResponsePB change_resp_02 =
       ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
   record_size = change_resp_02.cdc_sdk_proto_records_size();
-  LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
+
+  LOG(INFO) << "suresh: Total records read by GetChanges call on stream_id_1: " << record_size;
 }
 
 }  // namespace enterprise
