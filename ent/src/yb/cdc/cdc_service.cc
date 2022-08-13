@@ -841,6 +841,24 @@ void CDCServiceImpl::CreateEntryInCdcStateTable(
   QLAddStringRangeValue(cdc_state_table_write_req, stream_id);
   cdc_state_table->AddStringColumnValue(cdc_state_table_write_req,
                                         master::kCdcCheckpoint, op_id.ToString());
+  //QLValue last_active_time_map;
+  //last_active_time_map.set_map_value();
+  //last_active_time_map.add_map_key()->set_string_value(
+    //  stream_id + ":" + tablet_id);
+  // last_active_time_map.add_map_value()->set_string_value(
+  //   MonoDelta(CoarseMonoClock::Now().time_since_epoch()).ToString());
+  //LOG(INFO) << "suresh: cdc_state table column data type: "
+    //        << cdc_state_table->ColumnType(master::kCdcData);
+
+  //last_active_time_map.mutable_map_value()->add_keys()->set_string_value(
+    // stream_id + ":" + tablet_id);
+  // last_active_time_map.mu->set_string_value(
+  //   producer_tablet.stream_id + ":" + producer_tablet.tablet_id);
+  //last_active_time_map.mutable_map_value()->add_keys()->set_string_value(
+    //  MonoDelta(CoarseMonoClock::Now().time_since_epoch()).ToString());
+
+  //cdc_state_table->AddStringColumnValue(
+    //  cdc_state_table_write_req, master::kCdcData, last_active_time_map.ToString());
   ops->push_back(std::move(cdc_state_table_op));
 
   impl_->AddTabletCheckpoint(op_id, stream_id, tablet_id, producer_entries_modified);
@@ -1752,7 +1770,7 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
   };
   options.columns = std::vector<std::string>{
       master::kCdcTabletId, master::kCdcStreamId, master::kCdcCheckpoint,
-      master::kCdcLastReplicationTime};
+      master::kCdcLastReplicationTime, master::kCdcData};
 
   for (const auto& row : client::TableRange(**cdc_state_table_result, options)) {
     count++;
@@ -1764,6 +1782,7 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
     if (!timestamp_ql_value.IsNull()) {
       last_replicated_time_str = timestamp_ql_value.timestamp_value().ToFormattedString();
     }
+    auto stream_active_time_map = row.column(4);
 
     VLOG(1) << "stream_id: " << stream_id << ", tablet_id: " << tablet_id
             << ", checkpoint: " << checkpoint
@@ -1826,6 +1845,12 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
         }
         continue;
       }
+      if (!stream_active_time_map.IsNull()) {
+        LOG(INFO) << "suresh: last active time read from cdc_state table: "
+                  << stream_active_time_map.map_value().keys_size();
+      }
+      LOG(INFO) << "suresh: last active time read from cdc_state table: " << last_replicated_time_str;
+
       latest_active_time = impl_->GetLatestActiveTime(producer_tablet, *result);
     }
 
@@ -2935,7 +2960,19 @@ Status CDCServiceImpl::UpdateCheckpoint(
     DCHECK(!producer_tablet.stream_id.empty() && !producer_tablet.tablet_id.empty());
     QLAddStringHashValue(req, producer_tablet.tablet_id);
     QLAddStringRangeValue(req, producer_tablet.stream_id);
+    QLValue last_active_time_map;
 
+    //last_active_time_map.mutable_map_value()->add_keys()->set_string_value(
+      //  producer_tablet.stream_id + ":" + producer_tablet.tablet_id);
+    // last_active_time_map.mu->set_string_value(
+    //   producer_tablet.stream_id + ":" + producer_tablet.tablet_id);
+    //last_active_time_map.mutable_map_value()->add_keys()->set_string_value(
+      //  MonoDelta(CoarseMonoClock::Now().time_since_epoch()).ToString());
+    //last_active_time_map.add_map_value()->set_string_value(
+      //  MonoDelta(CoarseMonoClock::Now().time_since_epoch()).ToString());
+    // LOG(INFO) << "suresh: active_time set for the: " << producer_tablet.ToString() << " : "
+    //         << last_active_time_map.ToString();
+    cdc_state->AddStringColumnValue(req, master::kCdcData, last_active_time_map.ToString());
     cdc_state->AddStringColumnValue(req, master::kCdcCheckpoint, commit_op_id.ToString());
     // If we have a last record hybrid time, use that for physical time. If not, it means we're
     // caught up, so the current time.
