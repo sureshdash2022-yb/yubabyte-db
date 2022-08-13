@@ -86,6 +86,7 @@ struct TabletCDCCheckpointInfo {
   OpId cdc_sdk_op_id = OpId::Invalid();
   MonoDelta cdc_sdk_op_id_expiration = MonoDelta::kZero;
   CoarseTimePoint cdc_sdk_most_active_time = CoarseTimePoint::min();
+  std::unordered_set<CDCStreamId> active_stream_list;
 };
 
 using TabletOpIdMap = std::unordered_map<TabletId, TabletCDCCheckpointInfo>;

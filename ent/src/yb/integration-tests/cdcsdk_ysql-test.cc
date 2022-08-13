@@ -458,6 +458,36 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     }
   }
 
+  void FindTserversWithCacheHit(
+      const CDCStreamId stream_id, const TabletId tablet_id, uint32_t num_tservers) {
+    //int count = 0;
+    // check the CDC Service Cache of all the tservers.
+    for (uint32_t i = 0; i < num_tservers; ++i) {
+      const auto& tserver = test_cluster()->mini_tablet_server(i)->server();
+      auto cdc_service = dynamic_cast<CDCServiceImpl*>(
+          tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
+      auto status =
+          cdc_service->TEST_SearchFromCDCSeriveCache({"" /* UUID */, stream_id, tablet_id});
+      if (status.ok()) {
+        //count += 1;
+      }
+    }
+    //return count;
+  }
+
+  void ChangeTabletLeader(TabletId tablet_id, int new_leader_idx) {
+    string tool_path = GetToolPath("../bin", "yb-admin");
+    vector<string> argv;
+    argv.clear();
+    argv.push_back(tool_path);
+    argv.push_back("-master_addresses");
+    argv.push_back(AsString(test_cluster_.mini_cluster_->mini_master(0)->bound_rpc_addr()));
+    argv.push_back("leader_stepdown");
+    argv.push_back(tablet_id);
+    argv.push_back(test_cluster()->mini_tablet_server(new_leader_idx)->server()->permanent_uuid());
+    ASSERT_OK(Subprocess::Call(argv));
+  }
+
   void CheckRecord(
       const CDCSDKProtoRecordPB& record, CDCSDKYsqlTest::ExpectedRecord expected_records,
       uint32_t* count) {
@@ -3087,10 +3117,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
   ASSERT_FALSE(resp.has_error());
 
   // Insert some records in transaction.
-  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
-  ASSERT_OK(test_client()->FlushTables(
-      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
-      /* is_compaction = */ false));
+  ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
 
   GetChangesResponsePB change_resp;
   change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
@@ -3098,105 +3125,43 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
   ASSERT_GE(record_size, 100);
   LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
 
-  // check the CDC Service Cache of all the tservers.
-  for (uint32_t i = 0; i < num_tservers; ++i) {
-    const auto& tserver = test_cluster()->mini_tablet_server(i)->server();
-    auto cdc_service = dynamic_cast<CDCServiceImpl*>(
-        tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
+  //int cache_hit_tservers =
+      FindTserversWithCacheHit(stream_id, tablets[0].tablet_id(), num_tservers);
+  //ASSERT_EQ(cache_hit_tservers, 1);
 
-    auto status = cdc_service->TEST_SearchFromCDCSeriveCache(
-        {"" /* UUID */, stream_id, tablets[0].tablet_id()});
-    if (status.ok()) {
-      LOG(INFO) << "suresh: tserver :" << i
-                << " mentain the cache info for: " << tablets[0].tablet_id();
-
-    } else {
-      LOG(INFO) << "suresh: tserver :" << i
-                << " does not mentain the cache info for: " << tablets[0].table_id();
-    }
-  }
   // change LEADER of the tablet to tserver-2
-  string tool_path = GetToolPath("../bin", "yb-admin");
-  LOG(INFO) << "suresh: yb-admin path: " << tool_path;
-  vector<string> argv;
-  argv.push_back(tool_path);
-  argv.push_back("-master_addresses");
-  argv.push_back(AsString(test_cluster_.mini_cluster_->mini_master(0)->bound_rpc_addr()));
-  argv.push_back("leader_stepdown");
-  argv.push_back(tablets[0].tablet_id());
-  argv.push_back(test_cluster()->mini_tablet_server(1)->server()->permanent_uuid());
-  ASSERT_OK(Subprocess::Call(argv));
+  ChangeTabletLeader(tablets[0].tablet_id(), 1);
 
   // check the condition of cache after LEADER step down.
   // we will see prev as well as current LEADER cache, search stream exist.
-  for (uint32_t i = 0; i < num_tservers; ++i) {
-    const auto& tserver = test_cluster()->mini_tablet_server(i)->server();
-    auto cdc_service = dynamic_cast<CDCServiceImpl*>(
-        tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
+  //cache_hit_tservers =
+  FindTserversWithCacheHit(stream_id, tablets[0].tablet_id(), num_tservers);
+  //ASSERT_EQ(cache_hit_tservers, 2);
 
-    auto status = cdc_service->TEST_SearchFromCDCSeriveCache(
-        {"" /* UUID */, stream_id, tablets[0].tablet_id()});
-    if (status.ok()) {
-      LOG(INFO) << "suresh: tserver :" << i
-                << " mentain the cache info for: " << tablets[0].tablet_id();
-
-    } else {
-      LOG(INFO) << "suresh: tserver :" << i
-                << " does not mentain the cache info for: " << tablets[0].table_id();
-    }
-  }
-  // sleep for some time, so that active time in tserver-1 is beyond the
-  // the expiration time.
-  SleepFor(MonoDelta::FromMilliseconds(FLAGS_cdc_intent_retention_ms * 2));
+  // Keep refreshing the stream from the new LEADER, till we cross the
+  // FLAGS_cdc_intent_retention_ms.
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        int idx = 0;
+        while (idx < 10) {
+          auto result = GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint());
+          if (!result.ok()) {
+            return false;
+          }
+          idx += 1;
+          SleepFor(MonoDelta::FromMilliseconds(FLAGS_cdc_intent_retention_ms/10));
+        }
+        return true;
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
 
   // change LEADER of the tablet to tserver-1
-  tool_path = GetToolPath("../bin", "yb-admin");
-  LOG(INFO) << "suresh: yb-admin path: " << tool_path;
-  argv.clear();
-  argv.push_back(tool_path);
-  argv.push_back("-master_addresses");
-  argv.push_back(AsString(test_cluster_.mini_cluster_->mini_master(0)->bound_rpc_addr()));
-  argv.push_back("leader_stepdown");
-  argv.push_back(tablets[0].tablet_id());
-  argv.push_back(test_cluster()->mini_tablet_server(0)->server()->permanent_uuid());
-  ASSERT_OK(Subprocess::Call(argv));
+  ChangeTabletLeader(tablets[0].tablet_id(), 0);
 
   auto result = GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint());
-  if (!result.ok()) {
-    LOG(INFO) << "suresh: has expire error: " << result.status();
-  }
-
-  // restart the tservers
-  for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
-    test_cluster()->mini_tablet_server(i)->Shutdown();
-    ASSERT_OK(test_cluster()->mini_tablet_server(i)->Start());
-    ASSERT_OK(test_cluster()->mini_tablet_server(i)->WaitStarted());
-  }
-  // All cache should be in clean state.
-  for (uint32_t i = 0; i < num_tservers; ++i) {
-    const auto& tserver = test_cluster()->mini_tablet_server(i)->server();
-    auto cdc_service = dynamic_cast<CDCServiceImpl*>(
-        tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
-
-    auto status = cdc_service->TEST_SearchFromCDCSeriveCache(
-        {"" /* UUID */, stream_id, tablets[0].tablet_id()});
-    if (status.ok()) {
-      LOG(INFO) << "suresh: tserver :" << i
-                << " mentain the cache info for: " << tablets[0].tablet_id();
-
-    } else {
-      LOG(INFO) << "suresh: tserver :" << i
-                << " does not mentain the cache info for: " << tablets[0].table_id();
-    }
-  }
-
-  GetChangesResponsePB change_resp_02 =
-      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
-  record_size = change_resp_02.cdc_sdk_proto_records_size();
-
-  LOG(INFO) << "suresh: Total records read by GetChanges call on stream_id_1: " << record_size;
+  ASSERT_OK(result);
 }
 
 }  // namespace enterprise
-}  // namespace cdc
+}  // namespace cdc;
 }  // namespace yb

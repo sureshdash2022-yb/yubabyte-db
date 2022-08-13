@@ -606,6 +606,7 @@ class CDCServiceImpl::Impl {
     SharedLock<rw_spinlock> l(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
     if (it != tablet_checkpoints_.end()) {
+      LOG(INFO) << "suresh: Update the FOLLOWER active as now....";
       it->cdc_state_checkpoint.last_active_time = CoarseMonoClock::Now();
     }
   }
@@ -1471,6 +1472,9 @@ Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
     cdc_checkpoint_min.cdc_sdk_op_id.ToPB(update_index_req.add_cdc_sdk_consumed_ops());
     update_index_req.add_cdc_sdk_ops_expiration_ms(
         cdc_checkpoint_min.cdc_sdk_op_id_expiration.ToMilliseconds());
+    for (auto& stream_id : cdc_checkpoint_min.active_stream_list) {
+      update_index_req.add_stream_ids(stream_id);
+    }
 
     rpc::RpcController rpc;
     rpc.set_timeout(MonoDelta::FromMilliseconds(FLAGS_cdc_write_rpc_timeout_ms));
@@ -1811,13 +1815,17 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
     // Check stream associated with the tablet is active or not.
     // Don't consider those inactive stream for the min_checkpoint calculation.
     CoarseTimePoint latest_active_time = CoarseTimePoint ::min();
-    if (record.source_type == CDCSDK) {
+    // if current tsever is the tablet LEADER, send the FOLLOWER tablets to
+    // update their active_time in their CDCService Cache.
+    std::shared_ptr<tablet::TabletPeer> tablet_peer;
+    Status s = tablet_manager_->GetTabletPeer(tablet_id, &tablet_peer);
+    if (record.source_type == CDCSDK && s.ok() && IsTabletPeerLeader(tablet_peer)) {
       auto status = impl_->CheckStreamActive(producer_tablet);
       if (!status.ok()) {
         // Inactive stream read from cdc_state table are not considered for the minimum
         // cdc_sdk_op_id calculation except if tablet is associated with a single stream, This is
-        // required to update the cdc_sdk_op_id_expiration in the tablet_min_checkpoint_map for the
-        // corresponding tablet, so that the tablet PEERS will be updated with
+        // required to update the cdc_sdk_op_id_expiration in the tablet_min_checkpoint_map for
+        // the corresponding tablet, so that the tablet PEERS will be updated with
         // cdc_sdk_min_checkpoint_op_id_expiration_ as EXPIRED.
         if (tablet_min_checkpoint_map.find(tablet_id) == tablet_min_checkpoint_map.end()) {
           auto& tablet_info = tablet_min_checkpoint_map[tablet_id];
@@ -1826,6 +1834,7 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
         }
         continue;
       }
+      tablet_min_checkpoint_map[tablet_id].active_stream_list.insert(stream_id);
       latest_active_time = impl_->GetLatestActiveTime(producer_tablet, *result);
     }
 
@@ -2239,6 +2248,16 @@ void CDCServiceImpl::UpdateCdcReplicatedIndex(const UpdateCdcReplicatedIndexRequ
         cdc_sdk_op,
         cdc_sdk_op_id_expiration);
     RPC_STATUS_RETURN_ERROR(s, resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
+
+    if (req->stream_ids_size() > 0) {
+      for (int stream_idx = 0; stream_idx < req->stream_ids_size(); stream_idx++) {
+        ProducerTabletInfo producer_tablet = {
+            "" /* UUID */, req->stream_ids(stream_idx), req->tablet_ids(i)};
+        LOG(INFO) << "suresh updating FOLLOWER active time: " << producer_tablet.ToString();
+
+        impl_->UpdateActiveTime(producer_tablet);
+      }
+    }
   }
   context.RespondSuccess();
 }
