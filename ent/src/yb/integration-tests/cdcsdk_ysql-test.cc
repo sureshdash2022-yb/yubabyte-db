@@ -460,7 +460,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void FindTserversWithCacheHit(
       const CDCStreamId stream_id, const TabletId tablet_id, uint32_t num_tservers) {
-    //int count = 0;
+    // 8int count = 0;
     // check the CDC Service Cache of all the tservers.
     for (uint32_t i = 0; i < num_tservers; ++i) {
       const auto& tserver = test_cluster()->mini_tablet_server(i)->server();
@@ -469,10 +469,10 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       auto status =
           cdc_service->TEST_SearchFromCDCSeriveCache({"" /* UUID */, stream_id, tablet_id});
       if (status.ok()) {
-        //count += 1;
+        // count += 1;
       }
     }
-    //return count;
+    // return count;
   }
 
   void ChangeTabletLeader(TabletId tablet_id, int new_leader_idx) {
@@ -3125,18 +3125,18 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
   ASSERT_GE(record_size, 100);
   LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
 
-  //int cache_hit_tservers =
+  // int cache_hit_tservers =
       FindTserversWithCacheHit(stream_id, tablets[0].tablet_id(), num_tservers);
-  //ASSERT_EQ(cache_hit_tservers, 1);
+  // ASSERT_EQ(cache_hit_tservers, 1);
 
   // change LEADER of the tablet to tserver-2
   ChangeTabletLeader(tablets[0].tablet_id(), 1);
 
   // check the condition of cache after LEADER step down.
   // we will see prev as well as current LEADER cache, search stream exist.
-  //cache_hit_tservers =
+  // cache_hit_tservers =
   FindTserversWithCacheHit(stream_id, tablets[0].tablet_id(), num_tservers);
-  //ASSERT_EQ(cache_hit_tservers, 2);
+  // ASSERT_EQ(cache_hit_tservers, 2);
 
   // Keep refreshing the stream from the new LEADER, till we cross the
   // FLAGS_cdc_intent_retention_ms.
