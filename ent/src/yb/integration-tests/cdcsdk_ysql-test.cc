@@ -3163,5 +3163,5 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
 }
 
 }  // namespace enterprise
-}  // namespace cdc;
+}  // namespace cdc
 }  // namespace yb
