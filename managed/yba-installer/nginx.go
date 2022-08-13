@@ -19,11 +19,8 @@ type Nginx struct {
     ServerCertLocation string
 }
 
-// Method of the Component
-// Interface are implemented by
-// the Nginx struct and customizable
-// for each specific service.
-
+// SetUpPrereqs performs the setup operations specific
+// to Nginx.
 func (ngi Nginx) SetUpPrereqs() {
     arg1 := []string{"epel-release"}
     YumInstall(arg1)
@@ -31,6 +28,8 @@ func (ngi Nginx) SetUpPrereqs() {
     YumInstall(arg2)
 }
 
+// Install performs the installation procedures specific
+// to Nginx.
 func (ngi Nginx) Install() {
     if ngi.Mode == "https" {
         configureNginxConfHTTPS(ngi.ServerKeyLocation, ngi.ServerCertLocation,
@@ -39,6 +38,7 @@ func (ngi Nginx) Install() {
     certTLSstorage()
 }
 
+// Start performs the startup operations specific to Nginx.
 func (ngi Nginx) Start() {
     command1 := "systemctl"
     arg1 := []string{"daemon-reload"}
@@ -53,23 +53,28 @@ func (ngi Nginx) Start() {
     ExecuteBashCommand(command3, arg3)
 }
 
+// Stop performs the stop operations specific to Nginx.
 func (ngi Nginx) Stop() {
     command1 := "systemctl"
     arg1 := []string{"stop", "nginx"}
     ExecuteBashCommand(command1, arg1)
 }
 
+// Restart performs the restart operations specific to Nginx.
 func (ngi Nginx) Restart() {
     command1 := "systemctl"
     arg1 := []string{"restart", "nginx"}
     ExecuteBashCommand(command1, arg1)
 }
 
+// GetConfFileLocation gets the location of the Nginx config
+// file.
 func (ngi Nginx) GetConfFileLocation() string {
     return ngi.ConfFileLocation
 }
 
-// Per current cleanup.sh script.
+// Uninstall performs the uninstallation procedures specific
+// to Nginx.
 func (ngi Nginx) Uninstall() {
     ngi.Stop()
     os.RemoveAll("/opt/yugabyte")

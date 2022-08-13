@@ -12,24 +12,23 @@ import (
    "strings"
 )
 
-// Component 5: Common (general setup operations)
+// Common (general setup operations)
 type Common struct {
    Name    string
    Version string
    Mode    string
 }
 
-// Method of the Component
-// Interface are implemented by
-// the Common struct and customizable
-// for each specific service.
-
+// SetUpPrereqs performs the setup operations common to
+// all services.
 func (com Common) SetUpPrereqs() {
    Version()
    License()
    Preflight("yba-installer-input-preflight.yml")
 }
 
+// Install performs the installation procedures common to
+// all services.
 func (com Common) Install() {
    installPrerequisites()
    createYugabyteUser()
@@ -38,6 +37,8 @@ func (com Common) Install() {
    copyThirdPartyDependencies()
 }
 
+// Uninstall performs the uninstallation procedures common to
+// all services.
 func (com Common) Uninstall() {
    service0 := "yb-platform"
    service1 := "prometheus"
@@ -45,7 +46,7 @@ func (com Common) Uninstall() {
    services := []string{service0, service1, service2}
    command := "service"
 
-   for index, _ := range services {
+   for index := range services {
       commandCheck0 := "bash"
       subCheck0 := "systemctl list-unit-files --type service | grep -w " + services[index]
       argCheck0 := []string{"-c", subCheck0}
@@ -58,6 +59,7 @@ func (com Common) Uninstall() {
 
 }
 
+// Upgrade performs the upgrade procedures common to all services.
 func (com Common) Upgrade() {
     GenerateTemplatedConfiguration(com.Version, com.Mode)
     downloadPlatformSupportPackageAndYugabundle(com.Version)

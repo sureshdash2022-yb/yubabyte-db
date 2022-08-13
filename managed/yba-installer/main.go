@@ -51,63 +51,63 @@
 
     } else if commandLineArgs[0] == "createBackup" {
 
-        output_path := commandLineArgs[1]
+        outputPath := commandLineArgs[1]
 
-        data_dir := "/opt/yugabyte"
-        exclude_prometheus := false
-        skip_restart := false
+        dataDir := "/opt/yugabyte"
+        excludePrometheus := false
+        skipRestart := false
         verbose := false
 
         createBackupArgs := commandLineArgs[2:]
 
         if len(createBackupArgs) == 4 {
-            data_dir = createBackupArgs[0]
-            exclude_prometheus, _ = strconv.ParseBool(createBackupArgs[1])
-            skip_restart, _ = strconv.ParseBool(createBackupArgs[2])
+            dataDir = createBackupArgs[0]
+            excludePrometheus, _ = strconv.ParseBool(createBackupArgs[1])
+            skipRestart, _ = strconv.ParseBool(createBackupArgs[2])
             verbose, _ = strconv.ParseBool(createBackupArgs[3])
 
         } else if len(createBackupArgs) == 3 {
-            data_dir = createBackupArgs[0]
-            exclude_prometheus, _ = strconv.ParseBool(createBackupArgs[1])
-            skip_restart, _ = strconv.ParseBool(createBackupArgs[2])
+            dataDir = createBackupArgs[0]
+            excludePrometheus, _ = strconv.ParseBool(createBackupArgs[1])
+            skipRestart, _ = strconv.ParseBool(createBackupArgs[2])
 
         } else if len(createBackupArgs) == 2 {
-            data_dir = createBackupArgs[0]
-            exclude_prometheus, _ = strconv.ParseBool(createBackupArgs[1])
+            dataDir = createBackupArgs[0]
+            excludePrometheus, _ = strconv.ParseBool(createBackupArgs[1])
 
         } else if len(createBackupArgs) == 1 {
-            data_dir = createBackupArgs[0]
+            dataDir = createBackupArgs[0]
 
         }
 
-        CreateBackupScript(output_path, data_dir, exclude_prometheus,
-            skip_restart, verbose)
+        CreateBackupScript(outputPath, dataDir, excludePrometheus,
+            skipRestart, verbose)
 
     }  else if commandLineArgs[0] == "restoreBackup" {
 
-        input_path := commandLineArgs[1]
+        inputPath := commandLineArgs[1]
 
         destination := "/opt/yugabyte"
-        skip_restart := false
+        skipRestart := false
         verbose := false
 
         restoreBackupArgs := commandLineArgs[2:]
 
         if len(restoreBackupArgs) == 3 {
             destination = restoreBackupArgs[0]
-            skip_restart, _ = strconv.ParseBool(restoreBackupArgs[1])
+            skipRestart, _ = strconv.ParseBool(restoreBackupArgs[1])
             verbose, _ = strconv.ParseBool(restoreBackupArgs[2])
 
         } else if len(restoreBackupArgs) == 2 {
             destination = restoreBackupArgs[0]
-            skip_restart, _ = strconv.ParseBool(restoreBackupArgs[1])
+            skipRestart, _ = strconv.ParseBool(restoreBackupArgs[1])
 
         } else if len(restoreBackupArgs) == 1 {
             destination = restoreBackupArgs[0]
         }
 
-        RestoreBackupScript(input_path, destination,
-            skip_restart, verbose)
+        RestoreBackupScript(inputPath, destination,
+            skipRestart, verbose)
 
     } else if commandLineArgs[0] == "install" {
 
@@ -203,7 +203,8 @@
 
         }
 
-    for _, service := range order {
+    for index := range order {
+        service := order[index]
         serviceSteps := steps[service]
         fmt.Println("Executing steps for action " + commandLineArgs[0] + " for service " +
         service + "!")
