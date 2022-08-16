@@ -3142,7 +3142,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
   // FLAGS_cdc_intent_retention_ms.
   int idx = 0;
   while (idx < 10) {
-    auto result = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+    auto result =
+        ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
     idx += 1;
     SleepFor(MonoDelta::FromMilliseconds(FLAGS_cdc_intent_retention_ms / 10));
   }
