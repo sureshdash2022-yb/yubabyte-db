@@ -592,11 +592,11 @@ class CDCServiceImpl::Impl {
     return Status::OK();
   }
 
-  Status TEST_CheckStreamExist(const ProducerTabletInfo& producer_tablet) {
+  Result<TabletCheckpoint> TEST_GetTabletInfoFromCache(const ProducerTabletInfo& producer_tablet) {
     SharedLock<rw_spinlock> l(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
     if (it != tablet_checkpoints_.end()) {
-      return Status::OK();
+      return it->cdc_state_checkpoint;
     }
     return STATUS_FORMAT(InternalError, "Not found in cache.");
   }
@@ -1220,8 +1220,9 @@ Result<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> CDCService
   return all_tablets;
 }
 
-Status CDCServiceImpl::TEST_SearchFromCDCSeriveCache(const ProducerTabletInfo& producer_tablet) {
-  return impl_->TEST_CheckStreamExist(producer_tablet);
+Result<TabletCheckpoint> CDCServiceImpl::TEST_GetTabletInfoFromCache(
+    const ProducerTabletInfo& producer_tablet) {
+  return impl_->TEST_GetTabletInfoFromCache(producer_tablet);
 }
 
 void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
@@ -1822,7 +1823,7 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
     // update their active_time in their CDCService Cache.
     std::shared_ptr<tablet::TabletPeer> tablet_peer;
     Status s = tablet_manager_->GetTabletPeer(tablet_id, &tablet_peer);
-    if (record.source_type == CDCSDK && s.ok() && IsTabletPeerLeader(tablet_peer)) {
+    if (s.ok() && record.source_type == CDCSDK && IsTabletPeerLeader(tablet_peer)) {
       auto status = impl_->CheckStreamActive(producer_tablet);
       if (!status.ok()) {
         // Inactive stream read from cdc_state table are not considered for the minimum

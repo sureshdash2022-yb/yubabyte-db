@@ -119,8 +119,7 @@ class CDCServiceImpl : public CDCServiceIf {
                      GetCheckpointResponsePB* resp,
                      rpc::RpcContext rpc) override;
 
-  Status TEST_SearchFromCDCSeriveCache(const ProducerTabletInfo& producer_tablet);
-
+  Result<TabletCheckpoint> TEST_GetTabletInfoFromCache(const ProducerTabletInfo& producer_tablet);
 
   // Update peers in other tablet servers about the latest minimum applied cdc index for a specific
   // tablet.
