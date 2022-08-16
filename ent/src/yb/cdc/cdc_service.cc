@@ -596,7 +596,6 @@ class CDCServiceImpl::Impl {
     SharedLock<rw_spinlock> l(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
     if (it != tablet_checkpoints_.end()) {
-      LOG(INFO) << "suresh: There is a cache hit for: " << producer_tablet.ToString();
       return Status::OK();
     }
     return STATUS_FORMAT(InternalError, "Not found in cache.");
@@ -606,7 +605,6 @@ class CDCServiceImpl::Impl {
     SharedLock<rw_spinlock> l(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
     if (it != tablet_checkpoints_.end()) {
-      LOG(INFO) << "suresh: Update the FOLLOWER active as now....";
       it->cdc_state_checkpoint.last_active_time = CoarseMonoClock::Now();
     }
   }
@@ -1293,8 +1291,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     }
     return;
   }
-  LOG(INFO) << "suresh: calling Getchanges for the tablet_id: " << req->tablet_id()
-            << " stream_id: " << stream_id;
+
   auto res = GetStream(stream_id);
   RPC_CHECK_AND_RETURN_ERROR(res.ok(), res.status(), resp->mutable_error(),
                              CDCErrorPB::INTERNAL_ERROR, context);
@@ -1459,6 +1456,7 @@ Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
   std::vector<client::internal::RemoteTabletServer *> servers;
   RETURN_NOT_OK(GetTServers(tablet_id, &servers));
 
+  auto ts_leader = VERIFY_RESULT(GetLeaderTServer(tablet_id));
   for (const auto &server : servers) {
     if (server->IsLocal()) {
       // We modify our log directly. Avoid calling itself through the proxy.
@@ -1474,8 +1472,11 @@ Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
     cdc_checkpoint_min.cdc_sdk_op_id.ToPB(update_index_req.add_cdc_sdk_consumed_ops());
     update_index_req.add_cdc_sdk_ops_expiration_ms(
         cdc_checkpoint_min.cdc_sdk_op_id_expiration.ToMilliseconds());
-    for (auto& stream_id : cdc_checkpoint_min.active_stream_list) {
-      update_index_req.add_stream_ids(stream_id);
+    // Don't update active time for the TABLET LEADER. Only update in FOLLOWERS.
+    if (server->permanent_uuid() != ts_leader->permanent_uuid()) {
+      for (auto& stream_id : cdc_checkpoint_min.active_stream_list) {
+        update_index_req.add_stream_ids(stream_id);
+      }
     }
 
     rpc::RpcController rpc;
@@ -2255,8 +2256,6 @@ void CDCServiceImpl::UpdateCdcReplicatedIndex(const UpdateCdcReplicatedIndexRequ
       for (int stream_idx = 0; stream_idx < req->stream_ids_size(); stream_idx++) {
         ProducerTabletInfo producer_tablet = {
             "" /* UUID */, req->stream_ids(stream_idx), req->tablet_ids(i)};
-        LOG(INFO) << "suresh updating FOLLOWER active time: " << producer_tablet.ToString();
-
         impl_->UpdateActiveTime(producer_tablet);
       }
     }
