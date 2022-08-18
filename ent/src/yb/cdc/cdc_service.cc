@@ -542,7 +542,8 @@ class CDCServiceImpl::Impl {
   }
 
   CoarseTimePoint GetLatestActiveTime(
-      const ProducerTabletInfo& producer_tablet, const OpId& checkpoint) {
+      const ProducerTabletInfo& producer_tablet, const OpId& checkpoint,
+      bool create_entry_if_needed = true) {
     auto now = CoarseMonoClock::Now();
     TabletCheckpoint sent_checkpoint = {
         .op_id = OpId::Max(),
@@ -560,19 +561,25 @@ class CDCServiceImpl::Impl {
     // This happens when node is restarted, but Getchange is called for some other stream, not for
     // this stream, so there is no cache entry for the searched producer_tablet. In which case we
     // create an entry for this producer_tablet.
-    if (it == tablet_checkpoints_.end()) {
+    if (it == tablet_checkpoints_.end() && create_entry_if_needed) {
       tablet_checkpoints_.emplace(TabletCheckpointInfo{
           .producer_tablet_info = producer_tablet,
           .cdc_state_checkpoint = commit_checkpoint,
           .sent_checkpoint = sent_checkpoint,
           .mem_tracker = nullptr,
       });
+      it = tablet_checkpoints_.find(producer_tablet);
     }
-    it = tablet_checkpoints_.find(producer_tablet);
-    return it->cdc_state_checkpoint.last_active_time;
+
+    if (it != tablet_checkpoints_.end()) return it->cdc_state_checkpoint.last_active_time;
+
+    return {};
   }
 
-  Status CheckStreamActive(const ProducerTabletInfo& producer_tablet) {
+  Status CheckStreamActive(
+      const ProducerTabletInfo& producer_tablet,
+      const std::shared_ptr<client::TableHandle>& cdc_state_table,
+      const client::YBSessionPtr& session) {
     SharedLock<rw_spinlock> l(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
 
@@ -581,6 +588,37 @@ class CDCServiceImpl::Impl {
           CoarseMonoClock::Now() >
               it->cdc_state_checkpoint.last_active_time +
                   MonoDelta::FromMilliseconds(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms))) {
+        const auto readop = cdc_state_table->NewReadOp();
+        auto* const readreq = readop->mutable_request();
+        DCHECK(!producer_tablet.stream_id.empty() && !producer_tablet.tablet_id.empty());
+        QLAddStringHashValue(readreq, producer_tablet.tablet_id);
+
+        auto cond = readreq->mutable_where_expr()->mutable_condition();
+        cond->set_op(QLOperator::QL_OP_AND);
+        QLAddStringCondition(
+            cond, Schema::first_column_id() + master::kCdcStreamIdIdx, QL_OP_EQUAL,
+            producer_tablet.stream_id);
+        readreq->mutable_column_refs()->add_ids(
+            Schema::first_column_id() + master::kCdcTabletIdIdx);
+        readreq->mutable_column_refs()->add_ids(
+            Schema::first_column_id() + master::kCdcStreamIdIdx);
+        cdc_state_table->AddColumns({master::kCdcData}, readreq);
+
+        // TODO(async_flush): https://github.com/yugabyte/yugabyte-db/issues/12173
+        RETURN_NOT_OK(session->TEST_ReadSync(readop));
+        auto row_block = ql::RowsResult(readop.get()).GetRowBlock();
+        if (row_block->row_count() == 0) {
+          LOG(INFO) << "No rows found for reading in the cdc state table map for tablet_id "
+                    << producer_tablet.tablet_id << ", stream_id  " << producer_tablet.stream_id;
+        }
+
+        DCHECK_EQ(row_block->row_count(), 1);
+        DCHECK_EQ(row_block->row(0).column(0).type(), InternalType::kMapValue);
+
+        LOG(INFO) << "RKNRKN the time stored in cdc map for tablet_id " << producer_tablet.tablet_id
+                  << ", stream_id  " << producer_tablet.stream_id << " is "
+                  << row_block->row(0).column(0).map_value().keys().Get(0).string_value();
+
         return STATUS_FORMAT(
             InternalError, "stream ID $0 is expired for Tablet ID $1", producer_tablet.stream_id,
             producer_tablet.tablet_id);
@@ -1282,7 +1320,11 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
   StreamMetadata record = **res;
 
   if (record.source_type == CDCSDK) {
-    auto result = impl_->CheckStreamActive(producer_tablet);
+    Result<std::shared_ptr<client::TableHandle>> get_cdc_state_table_result = GetCdcStateTable();
+    RPC_CHECK_AND_RETURN_ERROR(
+        get_cdc_state_table_result.ok(), get_cdc_state_table_result.status(), resp->mutable_error(),
+        CDCErrorPB::INTERNAL_ERROR, context);
+    auto result = impl_->CheckStreamActive(producer_tablet, *get_cdc_state_table_result, session);
     RPC_STATUS_RETURN_ERROR(result, resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
     impl_->UpdateActiveTime(producer_tablet);
   }
@@ -1796,7 +1838,8 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
     // Don't consider those inactive stream for the min_checkpoint calculation.
     CoarseTimePoint latest_active_time = CoarseTimePoint ::min();
     if (record.source_type == CDCSDK) {
-      auto status = impl_->CheckStreamActive(producer_tablet);
+      auto session = client()->NewSession();
+      auto status = impl_->CheckStreamActive(producer_tablet, *cdc_state_table_result, session);
       if (!status.ok()) {
         // Inactive stream read from cdc_state table are not considered for the minimum
         // cdc_sdk_op_id calculation except if tablet is associated with a single stream, This is
@@ -2925,8 +2968,21 @@ Status CDCServiceImpl::UpdateCheckpoint(
     // caught up, so the current time.
     uint64_t last_replication_time_micros = last_record_hybrid_time != 0 ?
         HybridTime(last_record_hybrid_time).GetPhysicalValueMicros() : GetCurrentTimeMicros();
-    cdc_state->AddTimestampColumnValue(req, master::kCdcLastReplicationTime,
-                                       last_replication_time_micros);
+    cdc_state->AddTimestampColumnValue(
+        req, master::kCdcLastReplicationTime, last_replication_time_micros);
+
+    auto last_active_time = impl_->GetLatestActiveTime(producer_tablet, commit_op_id, false);
+    if (last_active_time.time_since_epoch().count() != 0) {
+      auto column_value = req->add_column_values();
+      column_value->set_column_id(cdc_state->ColumnId(master::kCdcData));
+      QLMapValuePB* map_value =
+          (column_value->mutable_expr()->mutable_value()->mutable_map_value());
+      QLValuePB* elem = map_value->add_keys();
+      elem->set_string_value(MonoDelta(last_active_time.time_since_epoch()).ToString());
+      elem = map_value->add_values();
+      elem->set_string_value("");
+    }
+
     // Only perform the update if we have a row in cdc_state to prevent a race condition where
     // a stream is deleted and then this logic inserts entries in cdc_state from that deleted
     // stream.

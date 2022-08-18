@@ -3507,6 +3507,15 @@ Status CatalogManager::CreateCDCStream(const CreateCDCStreamRequestPB* req,
         cdc_table.AddStringColumnValue(req, master::kCdcCheckpoint, OpId().ToString());
         cdc_table.AddTimestampColumnValue(
             req, master::kCdcLastReplicationTime, GetCurrentTimeMicros());
+
+        auto column_value = req->add_column_values();
+        column_value->set_column_id(cdc_table.ColumnId(master::kCdcData));
+        QLMapValuePB* map_value =
+            (column_value->mutable_expr()->mutable_value()->mutable_map_value());
+        QLValuePB* elem = map_value->add_keys();
+        elem->set_string_value(MonoDelta(CoarseMonoClock::Now().time_since_epoch()).ToString());
+        elem = map_value->add_values();
+        elem->set_string_value("");
         session->Apply(op);
       }
       // TODO(async_flush): https://github.com/yugabyte/yugabyte-db/issues/12173
