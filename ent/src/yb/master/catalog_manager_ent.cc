@@ -3513,7 +3513,7 @@ Status CatalogManager::CreateCDCStream(const CreateCDCStreamRequestPB* req,
         QLMapValuePB* map_value =
             (column_value->mutable_expr()->mutable_value()->mutable_map_value());
         QLValuePB* elem = map_value->add_keys();
-        elem->set_string_value(MonoDelta(CoarseMonoClock::Now().time_since_epoch()).ToString());
+        elem->set_string_value("0");
         elem = map_value->add_values();
         elem->set_string_value("");
         session->Apply(op);
