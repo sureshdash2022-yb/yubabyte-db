@@ -581,7 +581,7 @@ class CreateInstancesMethod(AbstractInstancesMethod):
             host_info = self.cloud.get_host_info(args)
             self.extra_vars.update(
                 get_ssh_host_port(host_info, args.custom_ssh_port, default_port=True))
-            ssh_port_updated = self.update_open_ssh_port(args,)
+            ssh_port_updated = self.update_open_ssh_port(args)
             use_default_port = not ssh_port_updated
             logging.info(
                 'Waiting for the startup script to finish on {}'.format(args.search_pattern))
@@ -1208,19 +1208,19 @@ class ConfigureInstancesMethod(AbstractInstancesMethod):
                     logging.info("[app] Copying package {} to {} took {:.3f} sec".format(
                         args.package, args.search_pattern, time.time() - start_time))
 
-                if args.ybc_package is not None:
-                    ybc_package_path = args.ybc_package
-                    if os.path.isfile(ybc_package_path):
-                        start_time = time.time()
-                        scp_to_tmp(
-                            ybc_package_path,
-                            self.extra_vars["private_ip"],
-                            self.extra_vars["ssh_user"],
-                            self.extra_vars["ssh_port"],
-                            args.private_key_file,
-                            ssh2_enabled=args.ssh2_enabled)
-                        logging.info("[app] Copying package {} to {} took {:.3f} sec".format(
-                            ybc_package_path, args.search_pattern, time.time() - start_time))
+            if args.ybc_package is not None:
+                ybc_package_path = args.ybc_package
+                if os.path.isfile(ybc_package_path):
+                    start_time = time.time()
+                    scp_to_tmp(
+                        ybc_package_path,
+                        self.extra_vars["private_ip"],
+                        self.extra_vars["ssh_user"],
+                        self.extra_vars["ssh_port"],
+                        args.private_key_file,
+                        ssh2_enabled=args.ssh2_enabled)
+                    logging.info("[app] Copying package {} to {} took {:.3f} sec".format(
+                        ybc_package_path, args.search_pattern, time.time() - start_time))
 
         # Update packages as "sudo" user as part of software upgrade.
         if args.update_packages:

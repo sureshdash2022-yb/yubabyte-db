@@ -75,10 +75,6 @@ public class UniverseDefinitionTaskParams extends UniverseTaskParams {
   // This is set during configure to figure out which cluster type is intended to be modified.
   @ApiModelProperty public ClusterType currentClusterType;
 
-  @ApiModelProperty public boolean enableYbc = false;
-
-  @ApiModelProperty public String ybcSoftwareVersion = null;
-
   public ClusterType getCurrentClusterType() {
     return currentClusterType == null ? ClusterType.PRIMARY : currentClusterType;
   }
@@ -157,8 +153,11 @@ public class UniverseDefinitionTaskParams extends UniverseTaskParams {
   // This flag indicates whether the Kubernetes universe will use new
   // naming style of the Helm chart. The value cannot be changed once
   // set during universe creation. Default is set to false for
-  // backward compatability.
+  // backward compatibility.
   @ApiModelProperty public boolean useNewHelmNamingStyle = false;
+
+  // Place all masters into default region flag.
+  @ApiModelProperty public boolean mastersInDefaultRegion = true;
 
   /** Allowed states for an imported universe. */
   public enum ImportedState {
@@ -497,6 +496,7 @@ public class UniverseDefinitionTaskParams extends UniverseTaskParams {
           + instanceTags;
     }
 
+    @Override
     public UserIntent clone() {
       UserIntent newUserIntent = new UserIntent();
       newUserIntent.universeName = universeName;
