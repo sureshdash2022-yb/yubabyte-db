@@ -3528,10 +3528,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
   CompareExpirationTime(tablets2[0].tablet_id(), correct_expiry_time, first_leader_index);
   CompareCacheActiveTime(
       stream_id, tablets[0].tablet_id(), correct_last_active_time, first_leader_index);
-
 }
-
-
 
 }  // namespace enterprise
 }  // namespace cdc
