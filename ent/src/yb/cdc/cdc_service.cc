@@ -1885,7 +1885,7 @@ Result<TabletOpIdMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
           impl_->CheckStreamActive(producer_tablet, *cdc_state_table_result, session, false);
       if (!status.ok()) {
         // If stream is not active in cache, cross check from cdc_state table before we mark as
-        // incative stream.
+        // inactive stream.
         if (active_time_cdc_map.time_since_epoch().count() != 0 &&
             CoarseMonoClock::Now() >
                 active_time_cdc_map +
@@ -3025,7 +3025,7 @@ Status CDCServiceImpl::UpdateCheckpoint(
     cdc_state->AddTimestampColumnValue(
         req, master::kCdcLastReplicationTime, last_replication_time_micros);
 
-    auto last_active_time = impl_->GetLatestActiveTime(producer_tablet, commit_op_id, false);
+    auto last_active_time = impl_->GetLatestActiveTime(producer_tablet, commit_op_id, true);
     if (last_active_time.time_since_epoch().count() != 0) {
       auto column_value = req->add_column_values();
       column_value->set_column_id(cdc_state->ColumnId(master::kCdcData));

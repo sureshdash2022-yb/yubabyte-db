@@ -864,62 +864,177 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       }
     }
   }
-  void CompareExpirationTime(
-      const TabletId& tablet_id, const CoarseTimePoint& prev_leader_expiry_time,
-      size_t current_leader_idx) {
-    ASSERT_OK(WaitFor(
-        [&]() {
-          CoarseTimePoint current_expiry_time;
-          while (true) {
-            for (auto const& peer : test_cluster()->GetTabletPeers(current_leader_idx)) {
-              if (peer->tablet_id() == tablet_id) {
-                current_expiry_time = peer->cdc_sdk_min_checkpoint_op_id_expiration();
-                break;
-              }
-            }
-            if (current_expiry_time >= prev_leader_expiry_time) {
-              LOG(INFO) << "The expiry time for the initial leader is: "
-                        << current_expiry_time.time_since_epoch().count()
-                        << ", and the correct expiry time should be: "
-                        << prev_leader_expiry_time.time_since_epoch().count();
-              return true;
-            }
-          }
-          return false;
-        },
-        MonoDelta::FromSeconds(60), "Waiting for active time is updated in FOLLOWERs"));
-  }
 
-  void CompareCacheActiveTime(
+  bool CompareCdcStateTableActiveTime(
       const CDCStreamId& stream_id, const TabletId& tablet_id,
-      const CoarseTimePoint& prev_leader_active_time, size_t current_leader_index) {
-    ASSERT_OK(WaitFor(
+      const CoarseTimePoint& prev_leader_active_time,
+      const CoarseTimePoint& curr_leader_active_time) {
+    auto result = WaitFor(
         [&]() -> Result<bool> {
-          while (true) {
-            const auto& first_tserver =
-                test_cluster()->mini_tablet_server(current_leader_index)->server();
-            auto cdc_service =
-                dynamic_cast<CDCServiceImpl*>(first_tserver->rpc_server()
-                                                  ->TEST_service_pool("yb.cdc.CDCService")
-                                                  ->TEST_get_service()
-                                                  .get());
-            auto tablet_info = cdc_service->TEST_GetTabletInfoFromCache({"", stream_id, tablet_id});
-            if (!tablet_info.ok()) {
-              return false;
+          // Read stream active time from cdc_state table,
+          client::TableHandle cdc_state;
+          client::YBTableName cdc_state_table(
+              YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
+          auto result = cdc_state.Open(cdc_state_table, test_client());
+          if (!result.ok()) {
+            return false;
+          }
+          const auto read_op = cdc_state.NewReadOp();
+          auto* const read_req = read_op->mutable_request();
+          auto req_cond = read_req->mutable_where_expr()->mutable_condition();
+          req_cond->set_op(QLOperator::QL_OP_AND);
+          QLAddStringCondition(
+              req_cond, Schema::first_column_id() + master::kCdcTabletIdIdx, QL_OP_EQUAL,
+              tablet_id);
+          QLAddStringCondition(
+              req_cond, Schema::first_column_id() + master::kCdcStreamIdIdx, QL_OP_EQUAL,
+              stream_id);
+          cdc_state.AddColumns({master::kCdcData}, read_req);
+          auto session = test_client()->NewSession();
+          EXPECT_OK(session->TEST_ApplyAndFlush(read_op));
+          auto row_block = ql::RowsResult(read_op.get()).GetRowBlock();
+          if (row_block->row_count() == 1) {
+            std::stringstream ss(
+                row_block->row(0).column(0).map_value().keys().Get(0).string_value());
+            uint64_t active_time_since_epoch;
+            ss >> active_time_since_epoch;
+            CoarseTimePoint active_time_cdc_map =
+                ToCoarse(MonoTime::FromUint64(active_time_since_epoch));
+            LOG(INFO) << "current_last_active_time: "
+                      << curr_leader_active_time.time_since_epoch().count()
+                      << " prev_leader_active_time: "
+                      << prev_leader_active_time.time_since_epoch().count()
+                      << " cdc_state table entry: "
+                      << active_time_cdc_map.time_since_epoch().count();
+            return curr_leader_active_time >= active_time_cdc_map &&
+                prev_leader_active_time <= active_time_cdc_map;
+          }
+          return false;
+        },
+        MonoDelta::FromSeconds(60), "Waiting for active time is updated in FOLLOWERs.");
+    if (!result.ok()) {
+      return false;
+    }
+    return true;
+  }
+
+  bool CompareExpirationTime(
+      const CDCStreamId& stream_id, const TabletId& tablet_id,
+      const CoarseTimePoint& prev_leader_expiration_time, const size_t current_leader_idx) {
+    CoarseTimePoint current_leader_expiration_time;
+
+#if 0
+    vector<size_t> leader_list{prev_leader_idx, current_leader_idx};
+    std::unordered_map<size_t, CoarseTimePoint> leader_active_time_map;
+
+    for (auto leader_idx : leader_list) {
+      for (auto const& peer : test_cluster()->GetTabletPeers(leader_idx)) {
+        if (peer->tablet_id() == tablet_id) {
+          leader_active_time_map[leader_idx] = peer->cdc_sdk_min_checkpoint_op_id_expiration();
+          //break;
+        }
+      }
+    }
+#endif
+    auto result = WaitFor(
+        [&]() -> Result<bool> {
+          for (auto const& peer : test_cluster()->GetTabletPeers(current_leader_idx)) {
+            if (peer->tablet_id() == tablet_id) {
+              current_leader_expiration_time = peer->cdc_sdk_min_checkpoint_op_id_expiration();
+              break;
             }
-            if (tablet_info->last_active_time >= prev_leader_active_time) {
-              LOG(INFO) << "current_last_active_time: "
-                        << tablet_info->last_active_time.time_since_epoch().count()
-                        << " prev_leader_active_time: "
-                        << prev_leader_active_time.time_since_epoch().count();
+          }
+          if (current_leader_expiration_time >= prev_leader_expiration_time) {
+            return true;
+          }
+          LOG(INFO) << "current_last_active_time: "
+                    << current_leader_expiration_time.time_since_epoch().count()
+                    << " prev_leader_active_time: "
+                    << prev_leader_expiration_time.time_since_epoch().count();
+          return false;
+        },
+        MonoDelta::FromSeconds(60), "Waiting for active time is updated in FOLLOWERs.");
+    if (!result.ok()) {
+      return false;
+    }
+
+    return CompareCdcStateTableActiveTime(
+        stream_id, tablet_id, prev_leader_expiration_time, current_leader_expiration_time);
+  }
+
+  bool CompareCacheActiveTime(
+      const CDCStreamId& stream_id, const TabletId& tablet_id, size_t prev_leader_index,
+      size_t current_leader_index) {
+    // vector<CoarseTimePoint> active_time;
+    vector<size_t> leader_list{prev_leader_index, current_leader_index};
+    std::unordered_map<size_t, CoarseTimePoint> leader_active_time_map;
+
+    for (auto leader_idx : leader_list) {
+      const auto& first_tserver = test_cluster()->mini_tablet_server(leader_idx)->server();
+      auto cdc_service = dynamic_cast<CDCServiceImpl*>(first_tserver->rpc_server()
+                                                           ->TEST_service_pool("yb.cdc.CDCService")
+                                                           ->TEST_get_service()
+                                                           .get());
+      auto tablet_info = cdc_service->TEST_GetTabletInfoFromCache({"", stream_id, tablet_id});
+      if (!tablet_info.ok()) {
+        return false;
+      }
+      leader_active_time_map[leader_idx] = tablet_info->last_active_time;
+    }
+    return CompareCdcStateTableActiveTime(
+        stream_id, tablet_id, leader_active_time_map[prev_leader_index],
+        leader_active_time_map[current_leader_index]);
+#if 0
+    auto result = WaitFor(
+        [&]() -> Result<bool> {
+          // Read stream active time from cdc_state table,
+          client::TableHandle cdc_state;
+          client::YBTableName cdc_state_table(
+              YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
+          auto result = cdc_state.Open(cdc_state_table, test_client());
+          if (!result.ok()) {
+            return false;
+          }
+          const auto read_op = cdc_state.NewReadOp();
+          auto* const read_req = read_op->mutable_request();
+          auto req_cond = read_req->mutable_where_expr()->mutable_condition();
+          req_cond->set_op(QLOperator::QL_OP_AND);
+          QLAddStringCondition(
+              req_cond, Schema::first_column_id() + master::kCdcTabletIdIdx, QL_OP_EQUAL,
+              tablet_id);
+          QLAddStringCondition(
+              req_cond, Schema::first_column_id() + master::kCdcStreamIdIdx, QL_OP_EQUAL,
+              stream_id);
+          cdc_state.AddColumns({master::kCdcData}, read_req);
+          auto session = test_client()->NewSession();
+          EXPECT_OK(session->TEST_ApplyAndFlush(read_op));
+          auto row_block = ql::RowsResult(read_op.get()).GetRowBlock();
+          if (row_block->row_count() == 1) {
+            std::stringstream ss(
+                row_block->row(0).column(0).map_value().keys().Get(0).string_value());
+            uint64_t active_time_since_epoch;
+            ss >> active_time_since_epoch;
+            CoarseTimePoint active_time_cdc_map =
+                ToCoarse(MonoTime::FromUint64(active_time_since_epoch));
+            LOG(INFO) << "current_last_active_time: "
+                      << leader_active_time_map[current_leader_index].time_since_epoch().count()
+                      << " prev_leader_active_time: "
+                      << leader_active_time_map[prev_leader_index].time_since_epoch().count()
+                      << " cdc_state table entry: " << active_time_cdc_map.time_since_epoch().count();
+            if (leader_active_time_map[current_leader_index] >= active_time_cdc_map &&
+                leader_active_time_map[prev_leader_index] <= active_time_cdc_map) {
               return true;
             }
           }
           return false;
         },
-        MonoDelta::FromSeconds(60), "Waiting for active time is updated in FOLLOWERs."));
+        MonoDelta::FromSeconds(60), "Waiting for active time is updated in FOLLOWERs.");
+    if (!result.ok()) {
+      return false;
+    }
+    return true;
+#endif
   }
-
 };
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestBaseFunctions)) {
@@ -3232,7 +3347,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderReElect)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
-  FLAGS_update_metrics_interval_ms = 1000;
+  //FLAGS_update_metrics_interval_ms = 1000;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   const int num_tservers = 3;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
@@ -3264,10 +3379,19 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderReElect)
   uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
   ASSERT_GE(record_size, 100);
   LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
-  SleepFor(MonoDelta::FromSeconds(1));
+  SleepFor(MonoDelta::FromSeconds(10));
+
+  CoarseTimePoint first_leader_expiration_time;
+  for (auto const& peer : test_cluster()->GetTabletPeers(first_leader_index)) {
+    if (peer->tablet_id() == tablets[0].tablet_id()) {
+      first_leader_expiration_time = peer->cdc_sdk_min_checkpoint_op_id_expiration();
+      break;
+    }
+  }
+  LOG(INFO) << "The correct expiry time after the first GetChanges call: "
+            << first_leader_expiration_time.time_since_epoch().count();
 
   ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
-
   size_t second_leader_index = -1;
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets2;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets2, /* partition_list_version =*/nullptr));
@@ -3295,32 +3419,33 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderReElect)
   // Call GetChanges so that the last active time is updated on the new leader.
   auto result = GetChangesFromCDC(stream_id, tablets2, &change_resp.cdc_sdk_checkpoint());
 
-  SleepFor(MonoDelta::FromSeconds(2));
-  CoarseTimePoint correct_expiry_time;
+  SleepFor(MonoDelta::FromSeconds(10));
+  CoarseTimePoint second_leader_expiration_time;
   for (auto const& peer : test_cluster()->GetTabletPeers(second_leader_index)) {
     if (peer->tablet_id() == tablets2[0].tablet_id()) {
-      correct_expiry_time = peer->cdc_sdk_min_checkpoint_op_id_expiration();
+      second_leader_expiration_time = peer->cdc_sdk_min_checkpoint_op_id_expiration();
       break;
     }
   }
   LOG(INFO) << "The correct expiry time after the final GetChanges call: "
-            << correct_expiry_time.time_since_epoch().count();
-
+            << second_leader_expiration_time.time_since_epoch().count();
+#if 0
   const auto& tserver = test_cluster()->mini_tablet_server(second_leader_index)->server();
   auto cdc_service = dynamic_cast<CDCServiceImpl*>(
       tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
   auto tablet_info = ASSERT_RESULT(
       cdc_service->TEST_GetTabletInfoFromCache({"", stream_id, tablets[0].tablet_id()}));
   auto correct_last_active_time = tablet_info.last_active_time;
+#endif
   // we need to ensure the initial leader get's back leadership
-  ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+  //ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
 
   // Call the test RPC to get last active time of the current leader (original), and it should
   // be lower than the previously recorded last_active_time.
   // SleepFor(MonoDelta::FromSeconds(2));
-  CompareExpirationTime(tablets2[0].tablet_id(), correct_expiry_time, first_leader_index);
-  CompareCacheActiveTime(
-      stream_id, tablets[0].tablet_id(), correct_last_active_time, first_leader_index);
+  ASSERT_EQ(CompareExpirationTime(
+      stream_id, tablets2[0].tablet_id(), first_leader_expiration_time, second_leader_index), true);
+  //ASSERT_EQ(CompareCacheActiveTime(stream_id, tablets[0].tablet_id(), first_leader_index, //second_leader_index), true);
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)) {
@@ -3426,14 +3551,14 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
   }
   LOG(INFO) << "The correct expiry time after the final GetChanges call: "
             << correct_expiry_time.time_since_epoch().count();
-
+#if 0
   const auto& tserver = test_cluster()->mini_tablet_server(second_leader_index)->server();
   auto cdc_service = dynamic_cast<CDCServiceImpl*>(
       tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
   auto tablet_info = ASSERT_RESULT(
       cdc_service->TEST_GetTabletInfoFromCache({"", stream_id, tablets[0].tablet_id()}));
   auto correct_last_active_time = tablet_info.last_active_time;
-
+#endif
   ASSERT_OK(ChangeLeaderOfTablet(second_follower_index, tablets[0].tablet_id()));
   // Now shutdown the second leader again, so that the previous leader can become the leader again.
   test_cluster()->mini_tablet_server(second_leader_index)->Shutdown();
@@ -3443,9 +3568,10 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
 
   // Call the test RPC to get last active time of the current leader (original), and it will
   // be lower than the previously recorded last_active_time.
-  CompareExpirationTime(tablets2[0].tablet_id(), correct_expiry_time, first_leader_index);
-  CompareCacheActiveTime(
-      stream_id, tablets[0].tablet_id(), correct_last_active_time, first_leader_index);
+  //ASSERT_EQ(CompareExpirationTime(
+    //  stream_id, tablets2[0].tablet_id(), second_leader_index, first_leader_index), true);
+  ASSERT_EQ(CompareCacheActiveTime(
+      stream_id, tablets[0].tablet_id(), second_leader_index, first_leader_index), true);
 }
 
 }  // namespace enterprise
