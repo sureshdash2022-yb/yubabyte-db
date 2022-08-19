@@ -581,6 +581,10 @@ class CDCServiceImpl::Impl {
           CoarseMonoClock::Now() >
               it->cdc_state_checkpoint.last_active_time +
                   MonoDelta::FromMilliseconds(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms))) {
+        LOG(ERROR) << "Stream ID: " << producer_tablet.stream_id
+                   << " expired for Tablet ID: " << producer_tablet.tablet_id
+                   << " with active time :"
+                   << it->cdc_state_checkpoint.last_active_time.time_since_epoch();
         return STATUS_FORMAT(
             InternalError, "stream ID $0 is expired for Tablet ID $1", producer_tablet.stream_id,
             producer_tablet.tablet_id);
@@ -598,7 +602,8 @@ class CDCServiceImpl::Impl {
     if (it != tablet_checkpoints_.end()) {
       return it->cdc_state_checkpoint;
     }
-    return STATUS_FORMAT(InternalError, "Not found in cache.");
+    return STATUS_FORMAT(
+        InternalError, "Tablet info: $0 not found in cache.", producer_tablet.ToString());
   }
 
   void UpdateActiveTime(const ProducerTabletInfo& producer_tablet) {
