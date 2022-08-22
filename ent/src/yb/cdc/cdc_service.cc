@@ -594,7 +594,6 @@ class CDCServiceImpl::Impl {
               << " found in CDCSerive Cache with active time: "
               << ": " << it->cdc_state_checkpoint.last_active_time.time_since_epoch()
               << " current time: " << ToSeconds(CoarseMonoClock::Now().time_since_epoch());
-      ;
     }
     return Status::OK();
   }
