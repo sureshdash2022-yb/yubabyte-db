@@ -3462,7 +3462,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
   SleepFor(MonoDelta::FromSeconds(10));
 
   size_t second_leader_index = -1;
-  size_t second_follower_index = -1;
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets2;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets2, /* partition_list_version =*/nullptr));
   ASSERT_EQ(tablets.size(), num_tablets);
@@ -3484,7 +3483,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
         if (i == first_leader_index) continue;
         if (test_cluster()->mini_tablet_server(i)->server()->permanent_uuid() ==
             replica.ts_info().permanent_uuid()) {
-          second_follower_index = i;
           LOG(INFO) << "Found second follower index: " << i;
           break;
         }
@@ -3506,6 +3504,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
   GetChangesResponsePB prev_change_resp = change_resp;
   change_resp =
       ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets2, &prev_change_resp.cdc_sdk_checkpoint()));
+  record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
 
   SleepFor(MonoDelta::FromSeconds(2));
   CoarseTimePoint correct_expiry_time;
@@ -3525,8 +3525,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
       cdc_service->TEST_GetTabletInfoFromCache({"", stream_id, tablets[0].tablet_id()}));
   auto correct_last_active_time = tablet_info.last_active_time;
 
-  ASSERT_OK(ChangeLeaderOfTablet(second_follower_index, tablets[0].tablet_id()));
-
   // We need to ensure the initial leader get's back leadership.
   ASSERT_OK(ChangeLeaderOfTablet(first_leader_index, tablets[0].tablet_id()));
 
@@ -3539,6 +3537,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
   prev_change_resp = change_resp;
   change_resp =
       ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets2, &prev_change_resp.cdc_sdk_checkpoint()));
+  record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
 
   // Call the test RPC to get last active time of the current leader (original), and it will
   // be lower than the previously recorded last_active_time.
