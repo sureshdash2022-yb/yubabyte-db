@@ -372,10 +372,18 @@ class TransactionParticipant::Impl
   }
 
   OpId GetLatestCheckPointUnlocked() {
-    return CoarseMonoClock::Now() < cdc_sdk_min_checkpoint_op_id_expiration_ &&
-                   cdc_sdk_min_checkpoint_op_id_ != OpId::Invalid()
-               ? cdc_sdk_min_checkpoint_op_id_
-               : OpId::Max();
+    OpId min_checkpoint;
+    if (CoarseMonoClock::Now() < cdc_sdk_min_checkpoint_op_id_expiration_ &&
+        cdc_sdk_min_checkpoint_op_id_ != OpId::Invalid()) {
+      min_checkpoint = cdc_sdk_min_checkpoint_op_id_;
+    } else {
+      VLOG(1) << "Checkpoint expiration with current time: "
+              << ToSeconds(CoarseMonoClock::Now().time_since_epoch()) << " expired time: "
+              << ToSeconds(cdc_sdk_min_checkpoint_op_id_expiration_.time_since_epoch())
+              << " checkpoint op_id: " << cdc_sdk_min_checkpoint_op_id_;
+      min_checkpoint = OpId::Max();
+    }
+    return min_checkpoint;
   }
 
   OpId GetRetainOpId() {

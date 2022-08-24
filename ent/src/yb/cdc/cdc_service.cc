@@ -572,32 +572,30 @@ class CDCServiceImpl::Impl {
     return it->cdc_state_checkpoint.last_active_time;
   }
 
-  void UpdateFollwerCache(
-      const ProducerTabletInfo& producer_tablet, const OpId& checkpoint) {
+  void UpdateFollwerCache(const ProducerTabletInfo& producer_tablet, const OpId& checkpoint) {
     auto now = CoarseMonoClock::Now();
-    TabletCheckpoint sent_checkpoint = {
-        .op_id = OpId::Max(),
-        .last_update_time = now,
-        .last_active_time = now,
-    };
-    TabletCheckpoint commit_checkpoint = {
-        .op_id = checkpoint,
-        .last_update_time = now,
-        .last_active_time = now,
-    };
-
     SharedLock<rw_spinlock> lock(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
     if (it == tablet_checkpoints_.end()) {
+      TabletCheckpoint sent_checkpoint = {
+          .op_id = OpId::Max(),
+          .last_update_time = now,
+          .last_active_time = now,
+      };
+      TabletCheckpoint commit_checkpoint = {
+          .op_id = checkpoint,
+          .last_update_time = now,
+          .last_active_time = now,
+      };
       tablet_checkpoints_.emplace(TabletCheckpointInfo{
           .producer_tablet_info = producer_tablet,
           .cdc_state_checkpoint = commit_checkpoint,
           .sent_checkpoint = sent_checkpoint,
           .mem_tracker = nullptr,
       });
+    } else {
+      it->cdc_state_checkpoint.last_active_time = now;
     }
-    it = tablet_checkpoints_.find(producer_tablet);
-    it->cdc_state_checkpoint.last_active_time = now;
   }
 
   Status CheckStreamActive(const ProducerTabletInfo& producer_tablet) {
