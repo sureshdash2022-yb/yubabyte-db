@@ -504,6 +504,8 @@ DEFINE_test_flag(bool, keep_docdb_table_on_ysql_drop_table, false,
                  "When enabled does not delete tables from the docdb layer, resulting in YSQL "
                  "tables only being dropped in the postgres layer.");
 
+DECLARE_string(yb_inflight_path);
+
 namespace yb {
 namespace master {
 
@@ -1386,7 +1388,8 @@ bool CatalogManager::StartRunningInitDbIfNeeded(int64_t term) {
     }
 
     Status status = PgWrapper::InitDbForYSQL(
-        master_addresses_str, "/tmp", master_->GetSharedMemoryFd());
+        master_addresses_str, FLAGS_yb_inflight_path.empty() ? "/tmp" : FLAGS_yb_inflight_path,
+        master_->GetSharedMemoryFd());
 
     if (FLAGS_create_initial_sys_catalog_snapshot && status.ok()) {
       Status write_snapshot_status = initial_snapshot_writer_->WriteSnapshot(

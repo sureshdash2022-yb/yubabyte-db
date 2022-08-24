@@ -4123,18 +4123,6 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-
-		{"yb_inflight_path", PGC_POSTMASTER, FILE_LOCATIONS,
-			gettext_noop("Sets the YB inflight path directory."),
-			NULL,
-			GUC_SUPERUSER_ONLY
-		},
-		&Yb_inflight_directory,
-		NULL,
-		NULL, NULL, NULL
-	},
-
-	{
 		{"config_file", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Sets the server's main configuration file."),
 			NULL,

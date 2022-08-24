@@ -2123,6 +2123,7 @@ printSourceNFA(regex_t *regex, TrgmColorInfo *colors, int ncolors)
 	int			nstates = pg_reg_getnumstates(regex);
 	int			state;
 	int			i;
+	const char	*yb_inflight_path = YBGetCurrentInflightPath();
 
 	initStringInfo(&buf);
 
@@ -2189,12 +2190,12 @@ printSourceNFA(regex_t *regex, TrgmColorInfo *colors, int ncolors)
 	{
 		/* dot -Tpng -o /tmp/source.png < /tmp/source.dot */
 		FILE *fp = NULL;
-		char *tmp_str = palloc0(MAX_STRING_LEN);
-		if (Yb_inflight_directory)
+		char *custom_path = palloc0(MAX_STRING_LEN);
+		if (yb_inflight_path)
 		{
-			snprintf(tmp_str, MAX_STRING_LEN, "%s/source.dot",
-					 Yb_inflight_directory);
-			fp = fopen(tmp_str, "w");
+			snprintf(custom_path, MAX_STRING_LEN, "%s/source.dot",
+					 yb_inflight_path);
+			fp = fopen(custom_path, "w");
 		}
 		else
 		{
@@ -2202,7 +2203,7 @@ printSourceNFA(regex_t *regex, TrgmColorInfo *colors, int ncolors)
 		}
 
 		fprintf(fp, "%s", buf.data);
-		pfree(tmp_str);
+		pfree(custom_path);
 		fclose(fp);
 	}
 
@@ -2219,6 +2220,7 @@ printTrgmNFA(TrgmNFA *trgmNFA)
 	HASH_SEQ_STATUS scan_status;
 	TrgmState  *state;
 	TrgmState  *initstate = NULL;
+	const char *yb_inflight_path = YBGetCurrentInflightPath();
 
 	initStringInfo(&buf);
 
@@ -2264,11 +2266,10 @@ printTrgmNFA(TrgmNFA *trgmNFA)
 		/* dot -Tpng -o /tmp/transformed.png < /tmp/transformed.dot */
 		char *tmp_str = NULL;
 		FILE *fp = NULL;
-		if (Yb_inflight_directory != NULL)
+		if (yb_inflight_path)
 		{
 			tmp_str = palloc0(MAX_STRING_LEN);
-			snprintf(tmp_str, MAX_STRING_LEN,
-					 "%s/transformed.dot" Yb_inflight_directory);
+			snprintf(tmp_str, MAX_STRING_LEN, "%s/transformed.dot", yb_inflight_path);
 			fp = fopen(tmp_str, "w");
 		}
 		else
@@ -2367,13 +2368,15 @@ printTrgmPackedGraph(TrgmPackedGraph *packedGraph, TRGM *trigrams)
 	{
 		/* dot -Tpng -o /tmp/packed.png < /tmp/packed.dot */
 		FILE *fp = NULL;
-		char *tmp_str = NULL;
-		if (Yb_inflight_directory != NULL)
+		char *custom_path = NULL;
+		const char *yb_inflight_path = YBGetCurrentInflightPath();
+
+		if (yb_inflight_path)
 		{
-			tmp_str = palloc0(MAX_STRING_LEN);
-			snprintf(tmp_str, MAX_STRING_LEN, "%s/packed.dot",
-					 Yb_inflight_directory);
-			fp = fopen(tmp_str, "w");
+			custom_path = palloc0(MAX_STRING_LEN);
+			snprintf(custom_path, MAX_STRING_LEN, "%s/packed.dot",
+					 yb_inflight_path);
+			fp = fopen(custom_path, "w");
 		}
 		else
 		{
@@ -2382,7 +2385,7 @@ printTrgmPackedGraph(TrgmPackedGraph *packedGraph, TRGM *trigrams)
 
 		fprintf(fp, "%s", buf.data);
 		fclose(fp);
-		pfree(tmp_str);
+		pfree(custom_path);
 	}
 
 	pfree(buf.data);

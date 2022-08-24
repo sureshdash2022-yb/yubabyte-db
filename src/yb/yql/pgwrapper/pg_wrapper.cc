@@ -468,17 +468,6 @@ Status PgWrapper::Start() {
     argv.push_back("log_error_verbosity=VERBOSE");
   }
 
-    if (!FLAGS_yb_inflight_path.empty()) {
-      Result<bool> dir_exists = Env::Default()->DoesDirectoryExist(FLAGS_yb_inflight_path);
-      if (!dir_exists.ok()) {
-        return STATUS_FORMAT(
-            IOError, "Path doesnot exist $0 status: $1", FLAGS_yb_inflight_path,
-            dir_exists.status().ToString());
-      }
-      argv.push_back("-c");
-      argv.push_back("yb_inflight_path=" + FLAGS_yb_inflight_path);
-    }
-
   pg_proc_.emplace(postgres_executable, argv);
   vector<string> ld_library_path {
     GetPostgresLibPath(),
@@ -500,6 +489,17 @@ Status PgWrapper::Start() {
     std::string path = FLAGS_postmaster_cgroup + "/cgroup.procs";
     pg_proc_->AddPIDToCGroup(path, pg_proc_->pid());
   }
+  // Set a customisable /tmp path, as a part environmental variable.
+  if (!FLAGS_yb_inflight_path.empty()) {
+    Result<bool> dir_exists = Env::Default()->DoesDirectoryExist(FLAGS_yb_inflight_path);
+    if (!dir_exists.ok()) {
+      return STATUS_FORMAT(
+          IOError, "Path doesnot exist $0 status: $1", FLAGS_yb_inflight_path,
+          dir_exists.status().ToString());
+    }
+    pg_proc_->SetEnv("FLAGS_yb_inflight_path", FLAGS_yb_inflight_path);
+  }
+
   LOG(INFO) << "PostgreSQL server running as pid " << pg_proc_->pid();
   return Status::OK();
 }

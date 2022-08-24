@@ -69,7 +69,6 @@ char	   *Log_directory = NULL;
 char	   *Log_filename = NULL;
 bool		Log_truncate_on_rotation = false;
 int			Log_file_mode = S_IRUSR | S_IWUSR;
-char	   *Yb_inflight_directory = NULL;
 
 /*
  * Globally visible state (used by elog.c)
