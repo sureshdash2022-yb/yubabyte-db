@@ -1061,7 +1061,6 @@ OpId TabletPeer::GetLatestCheckPoint() {
   if (txn_participant) {
     return txn_participant->GetLatestCheckPoint();
   }
-  
   return OpId();
 }
 
