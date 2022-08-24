@@ -377,8 +377,8 @@ class TransactionParticipant::Impl
         cdc_sdk_min_checkpoint_op_id_ != OpId::Invalid()) {
       min_checkpoint = cdc_sdk_min_checkpoint_op_id_;
     } else {
-      VLOG(1) << "Checkpoint expiration with current time: "
-              << ToSeconds(CoarseMonoClock::Now().time_since_epoch()) << " expired time: "
+      VLOG(1) << "Tablet peer checkpoint is expired with the current time: "
+              << ToSeconds(CoarseMonoClock::Now().time_since_epoch()) << " expiration time: "
               << ToSeconds(cdc_sdk_min_checkpoint_op_id_expiration_.time_since_epoch())
               << " checkpoint op_id: " << cdc_sdk_min_checkpoint_op_id_;
       min_checkpoint = OpId::Max();

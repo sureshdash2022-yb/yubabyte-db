@@ -531,7 +531,7 @@ Status ProcessIntents(
           << ", with apply record op_id : " << op_id << ", is: " << (*keyValueIntents).size();
 
   const OpId& checkpoint_op_id = tablet_peer->GetLatestCheckPoint();
-  if ((*keyValueIntents).size() == 0 && op_id <= tablet_peer->GetLatestCheckPoint()) {
+  if ((*keyValueIntents).size() == 0 && op_id <= checkpoint_op_id) {
     LOG(ERROR) << "CDCSDK is trying to get intents for a transaction: " << transaction_id
                << ", whose ApplyOpId " << op_id
                << "is greater than the checkpoint in the tablet peer: " << checkpoint_op_id
