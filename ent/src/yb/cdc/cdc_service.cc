@@ -572,7 +572,7 @@ class CDCServiceImpl::Impl {
     return it->cdc_state_checkpoint.last_active_time;
   }
 
-  void UpdateFollwerCache(const ProducerTabletInfo& producer_tablet, const OpId& checkpoint) {
+  void UpdateFollowerCache(const ProducerTabletInfo& producer_tablet, const OpId& checkpoint) {
     auto now = CoarseMonoClock::Now();
     SharedLock<rw_spinlock> lock(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
@@ -2288,7 +2288,7 @@ void CDCServiceImpl::UpdateCdcReplicatedIndex(const UpdateCdcReplicatedIndexRequ
       for (int stream_idx = 0; stream_idx < req->stream_ids_size(); stream_idx++) {
         ProducerTabletInfo producer_tablet = {
             "" /* UUID */, req->stream_ids(stream_idx), req->tablet_ids(i)};
-        impl_->UpdateFollwerCache(producer_tablet, cdc_sdk_op);
+        impl_->UpdateFollowerCache(producer_tablet, cdc_sdk_op);
       }
     }
   }
