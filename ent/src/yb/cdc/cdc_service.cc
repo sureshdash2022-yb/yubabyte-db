@@ -1515,9 +1515,17 @@ Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
 
     rpc::RpcController rpc;
     rpc.set_timeout(MonoDelta::FromMilliseconds(FLAGS_cdc_write_rpc_timeout_ms));
-    RETURN_NOT_OK(proxy->UpdateCdcReplicatedIndex(update_index_req, &update_index_resp, &rpc));
-    if (update_index_resp.has_error()) {
-      return StatusFromPB(update_index_resp.error().status());
+    auto result = proxy->UpdateCdcReplicatedIndex(update_index_req, &update_index_resp, &rpc);
+    // If UpdateCdcReplicatedIndex failed for one of the tablet peers, don't stop to update
+    // the minimum checkpoint to other FOLLOWERs.
+    if (!result.ok() || update_index_resp.has_error()) {
+      std::stringstream msg;
+      msg << "Failed to update cdc replicated index for tablet: " << tablet_id
+          << " in remote peer: " << server->ToString();
+      if (update_index_resp.has_error()) {
+        msg << ":" << StatusFromPB(update_index_resp.error().status());
+      }
+      LOG(WARNING) << msg.str();
     }
   }
   return Status::OK();
