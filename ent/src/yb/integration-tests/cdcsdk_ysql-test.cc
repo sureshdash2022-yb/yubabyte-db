@@ -3547,8 +3547,9 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
       stream_id, tablets[0].tablet_id(), correct_last_active_time, first_leader_index);
 }
 
-TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDeleteStreamWithTserversMoreThanReplicationFactor)) {
-  //FLAGS_update_min_cdc_indices_interval_secs = 1;
+TEST_F(
+    CDCSDKYsqlTest,
+    YB_DISABLE_TEST_IN_TSAN(TestDeleteStreamWithTserversMoreThanReplicationFactor)) {
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   const int num_tservers = 5;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
@@ -3575,7 +3576,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDeleteStreamWithTserversMoreT
   vector<size_t> tablet_leader_list(3);
   size_t first_follower_index = 0;
   for (uint32_t idx = 0; idx < num_tablets; idx++) {
-    GetTabletLeaderAndAnyFollowerIndex(tablets, idx, &tablet_leader_list[idx], &first_follower_index);
+    GetTabletLeaderAndAnyFollowerIndex(
+        tablets, idx, &tablet_leader_list[idx], &first_follower_index);
   }
 
   // Insert some records in transaction.
@@ -3601,14 +3603,14 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDeleteStreamWithTserversMoreT
   }
 #endif
 
-    // Deleting the stream-2 associated with both tables
-    ASSERT_TRUE(DeleteCDCStream(stream_id));
+  // Deleting the stream.
+  ASSERT_TRUE(DeleteCDCStream(stream_id));
 
-    for (uint32_t idx = 0; idx < num_tablets; idx++) {
-      VerifyStreamDeletedFromCdcState(test_client(), stream_id, tablets.Get(idx).tablet_id());
-      VerifyTransactionParticipant(tablets.Get(idx).tablet_id(), OpId::Max());
-    }
+  for (uint32_t idx = 0; idx < num_tablets; idx++) {
+    VerifyStreamDeletedFromCdcState(test_client(), stream_id, tablets.Get(idx).tablet_id());
+    VerifyTransactionParticipant(tablets.Get(idx).tablet_id(), OpId::Max());
   }
+}
 
 }  // namespace enterprise
 }  // namespace cdc
