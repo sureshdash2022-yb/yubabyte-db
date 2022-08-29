@@ -320,7 +320,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   }
 
   Result<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> SetUpCluster() {
-    RETURN_NOT_OK(SetUpWithParams(3, 1, false));
+    RETURN_NOT_OK(SetUpWithParams(5, 1, false));
     auto table = EXPECT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
     google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
     RETURN_NOT_OK(test_client()->GetTablets(table, 0, &tablets, nullptr));
@@ -848,14 +848,14 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void GetTabletLeaderAndAnyFollowerIndex(
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
-      int tablet_idx, size_t* leader_index, size_t* follower_index) {
-    for (auto replica : tablets[tablet_idx].replicas()) {
+      size_t* leader_index, size_t* follower_index) {
+    for (auto replica : tablets[0].replicas()) {
       for (size_t i = 0; i < test_cluster()->num_tablet_servers(); i++) {
         if (test_cluster()->mini_tablet_server(i)->server()->permanent_uuid() ==
             replica.ts_info().permanent_uuid()) {
           if (replica.role() == PeerRole::LEADER) {
             *leader_index = i;
-            LOG(INFO) << "Found first leader index: " << i << " for tablet idx: " << tablet_idx;
+            LOG(INFO) << "Found first leader index: " << i;
           } else if (replica.role() == PeerRole::FOLLOWER) {
             *follower_index = i;
             LOG(INFO) << "Found first follower index: " << i;
@@ -923,7 +923,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestBaseFunctions)) {
   // setting up a cluster with 3 RF
-  ASSERT_OK(SetUpWithParams(3, 1, false /* colocated */));
+  ASSERT_OK(SetUpWithParams(5, 1, false /* colocated */));
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
@@ -932,7 +932,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestBaseFunctions)) {
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestLoadInsertionOnly)) {
   // set up an RF3 cluster
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
@@ -1164,7 +1164,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(InsertBeforeAfterSnapshot)) {
 // Begin transaction, insert one row, commit transaction, enable snapshot
 // Expected records: (DDL, READ).
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(InsertSingleRowSnapshot)) {
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, nullptr));
@@ -1200,7 +1200,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(InsertSingleRowSnapshot)) {
 // Begin transaction, insert one row, commit transaction, update, enable snapshot
 // Expected records: (DDL, READ).
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(UpdateInsertedRowSnapshot)) {
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, nullptr));
@@ -1237,7 +1237,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(UpdateInsertedRowSnapshot)) {
 // Begin transaction, insert one row, commit transaction, delete, enable snapshot
 // Expected records: (DDL).
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(DeleteInsertedRowSnapshot)) {
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, nullptr));
@@ -1425,13 +1425,13 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(InsertBeforeDuringAfterSnapshot))
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(DropDatabase)) {
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
   ASSERT_OK(DropDB(&test_cluster_));
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestNeedSchemaInfoFlag)) {
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
@@ -1467,7 +1467,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestNeedSchemaInfoFlag)) {
 
 // Insert a single row, truncate table, insert another row.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestTruncateTable)) {
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
@@ -1543,7 +1543,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestSetCDCCheckpoint)) {
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeCDCStreamDelete)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
@@ -1573,7 +1573,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeCDCStreamDelet
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeXClusterStreamDelete)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
@@ -1614,7 +1614,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCheckPointPersistencyNodeRest
   FLAGS_enable_update_local_peer_min_index = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -1676,7 +1676,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCheckPointPersistencyNodeRest
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCleanupSingleStreamSingleTserver)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -1704,7 +1704,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCleanupSingleStreamSingleTser
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCleanupSingleStreamMultiTserver)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -1734,7 +1734,7 @@ TEST_F(
     YB_DISABLE_TEST_IN_TSAN(TestCleanupMultiStreamDeleteSingleStreamSingleTserver)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -1767,7 +1767,7 @@ TEST_F(
     CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCleanupMultiStreamDeleteSingleStreamMultiTserver)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -1800,7 +1800,7 @@ TEST_F(
     CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCleanupMultiStreamDeleteAllStreamsSingleTserver)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -1835,7 +1835,7 @@ TEST_F(
     CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCleanupMultiStreamDeleteAllStreamsMultiTserver)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -1870,7 +1870,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultpleStreamOnSameTablet)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_intent_retention_ms = 10000;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -1922,7 +1922,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultpleActiveStreamOnSameTabl
   FLAGS_enable_update_local_peer_min_index = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -2014,7 +2014,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestActiveAndInActiveStreamOnSame
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   FLAGS_cdc_intent_retention_ms = 5000;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -2119,7 +2119,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestActiveAndInActiveStreamOnSame
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCheckPointPersistencyAllNodesRestart)) {
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -2202,7 +2202,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentCountPersistencyAllNode
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   // We want to force every GetChanges to update the cdc_state table.
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -2280,7 +2280,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestHighIntentCountPersistencyAll
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
   FLAGS_log_segment_size_bytes = 100;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -2329,7 +2329,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentCountPersistencyRemoteB
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_update_metrics_interval_ms = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -2419,7 +2419,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnum)) {
   FLAGS_enable_update_local_peer_min_index = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(
@@ -2466,7 +2466,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumOnRestart)) {
   FLAGS_enable_update_local_peer_min_index = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(
@@ -2525,7 +2525,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumMultipleStreams)) {
   FLAGS_enable_update_local_peer_min_index = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
 
@@ -2585,7 +2585,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestTransactionWithLargeBatchSize
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   FLAGS_consensus_max_batch_size_bytes = 1000;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -2639,7 +2639,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentCountPersistencyAfterCo
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   FLAGS_aborted_intent_cleanup_ms = 1000;  // 1 sec
 
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
 
@@ -2724,7 +2724,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestLogGCedWithTabletBootStrap)) 
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   FLAGS_log_segment_size_bytes = 100;
   FLAGS_log_min_seconds_to_retain = 10;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   const uint32_t num_tablets = 1;
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -2783,7 +2783,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestXClusterLogGCedWithTabletBoot
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   FLAGS_log_segment_size_bytes = 100;
   FLAGS_log_min_seconds_to_retain = 10;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   const uint32_t num_tablets = 1;
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -2867,7 +2867,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumWithMultipleTablets)) {
   vector<std::string> tablePrefix{"_01", "_02"};
   const int total_stream_count = 2;
 
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   // Here we are verifying Enum Cache for a tablespace that needs to be re-updated // if there is a
   // cache miss in any of the tsever. This can happen when enum cache entry is created for the
@@ -2942,7 +2942,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestSetCDCCheckpointWithHigherTse
 // catalog.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupAndDropTable)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
@@ -2972,7 +2972,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupAndDropT
 // deleted tables from master cache as well as system catalog.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTableDrop)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   const vector<string> table_list_suffix = {"_1", "_2", "_3"};
   const int kNumTables = 3;
   vector<YBTableName> table(kNumTables);
@@ -3041,7 +3041,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTab
 // as system catalog.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpAndDeleteStream)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
 
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
 
@@ -3074,7 +3074,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpAndDeleteStr
 // call GetDBStreamInfo on both stream-id, we should not get any information related to drop table.
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableAndDropTable)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   const vector<string> table_list_suffix = {"_1", "_2"};
   vector<YBTableName> table(2);
   vector<CDCStreamId> stream_id(2);
@@ -3129,7 +3129,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableAndDrop
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableAndDeleteStream)) {
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   const vector<string> table_list_suffix = {"_1", "_2"};
   vector<YBTableName> table(2);
   vector<CDCStreamId> stream_id(2);
@@ -3184,7 +3184,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCreateStreamAfterSetCheckpoin
   // We want to force every GetChanges to update the cdc_state table.
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
 
-  ASSERT_OK(SetUpWithParams(1, 1, false));
+  ASSERT_OK(SetUpWithParams(5, 1, false));
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
@@ -3261,7 +3261,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   FLAGS_cdc_intent_retention_ms = 10000;
   // FLAGS_cdc_intent_retention_ms = 1000;
-  const int num_tservers = 3;
+  const int num_tservers = 5;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
 
   const uint32_t num_tablets = 1;
@@ -3319,7 +3319,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderReElect)
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_update_metrics_interval_ms = 1000;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
-  const int num_tservers = 3;
+  const int num_tservers = 5;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
 
   const uint32_t num_tablets = 1;
@@ -3350,7 +3350,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderReElect)
   SleepFor(MonoDelta::FromSeconds(1));
   size_t first_leader_index = 0;
   size_t first_follower_index = 0;
-  GetTabletLeaderAndAnyFollowerIndex(tablets, 0, &first_leader_index, &first_follower_index);
+  GetTabletLeaderAndAnyFollowerIndex(tablets,  &first_leader_index, &first_follower_index);
 
   GetChangesResponsePB change_resp_1 = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
   LOG(INFO) << "Number of records after first transaction: " << change_resp_1.records().size();
@@ -3439,7 +3439,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
 
   size_t first_leader_index = 0;
   size_t first_follower_index = 0;
-  GetTabletLeaderAndAnyFollowerIndex(tablets, 0, &first_leader_index, &first_follower_index);
+  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
 
   // Insert some records in transaction.
   ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
@@ -3547,9 +3547,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
       stream_id, tablets[0].tablet_id(), correct_last_active_time, first_leader_index);
 }
 
-TEST_F(
-    CDCSDKYsqlTest,
-    YB_DISABLE_TEST_IN_TSAN(TestDeleteStreamWithTserversMoreThanReplicationFactor)) {
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDeleteStreamWithTserversMoreThanTabletSplit)) {
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   const int num_tservers = 5;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
@@ -3573,13 +3571,6 @@ TEST_F(
     ASSERT_FALSE(resp.has_error());
   }
 
-  vector<size_t> tablet_leader_list(3);
-  size_t first_follower_index = 0;
-  for (uint32_t idx = 0; idx < num_tablets; idx++) {
-    GetTabletLeaderAndAnyFollowerIndex(
-        tablets, idx, &tablet_leader_list[idx], &first_follower_index);
-  }
-
   // Insert some records in transaction.
   ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
   ASSERT_OK(test_client()->FlushTables(
@@ -3594,14 +3585,6 @@ TEST_F(
   }
   ASSERT_GE(record_size, 100);
   LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
-#if 0
-  for (uint32_t idx = 0; idx < num_tablets; idx++) {
-    const auto& tserver = test_cluster()->mini_tablet_server(tablet_leader_list[idx])->server();
-    auto cdc_service = dynamic_cast<CDCServiceImpl*>(
-        tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
-    cdc_service->CDCServiceDisable();
-  }
-#endif
 
   // Deleting the stream.
   ASSERT_TRUE(DeleteCDCStream(stream_id));
