@@ -1664,6 +1664,10 @@ void CDCServiceImpl::SetCDCServiceEnabled() {
   cdc_enabled_.store(true, std::memory_order_release);
 }
 
+void CDCServiceImpl::CDCServiceDisable() {
+  cdc_enabled_.store(false, std::memory_order_release);
+}
+
 Result<std::shared_ptr<client::TableHandle>> CDCServiceImpl::GetCdcStateTable() {
   bool use_cache = GetAtomicFlag(&FLAGS_enable_cdc_state_table_caching);
   {
@@ -2044,7 +2048,7 @@ Status CDCServiceImpl::DeleteCDCStateTableMetadata(
       Status s = session->TEST_ApplyAndFlush(delete_op);
       if (!s.ok()) {
         LOG(WARNING) << "Unable to flush operations to delete cdc streams: " << s;
-        return s.CloneAndPrepend("Error deleting cdc stream rows from cdc_state table");
+        continue;
       }
       LOG(INFO) << "CDC state table entry for tablet " << tablet_id << " and streamid " << stream_id
                 << " is deleted";

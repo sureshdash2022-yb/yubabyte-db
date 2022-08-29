@@ -179,6 +179,9 @@ class CDCServiceImpl : public CDCServiceIf {
   // Marks the CDC enable flag as true.
   void SetCDCServiceEnabled();
 
+  // Marks the CDC eanble flag as false.
+  void CDCServiceDisable();
+
  private:
   FRIEND_TEST(CDCServiceTest, TestMetricsOnDeletedReplication);
   FRIEND_TEST(CDCServiceTestMultipleServersOneTablet, TestMetricsAfterServerFailure);
