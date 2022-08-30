@@ -1821,7 +1821,8 @@ TEST_F(
     stream_id_list[idx] = ASSERT_RESULT(CreateDBStream(IMPLICIT));
     // Set checkpint for all the tablets.
     for (uint32_t jdx = 0; jdx < num_tablets; jdx++) {
-      auto resp_1 = ASSERT_RESULT(SetCDCCheckpoint(stream_id_list[idx], tablets, OpId::Min(), true, jdx));
+      auto resp_1 =
+          ASSERT_RESULT(SetCDCCheckpoint(stream_id_list[idx], tablets, OpId::Min(), true, jdx));
       ASSERT_FALSE(resp_1.has_error());
     }
   }
@@ -1864,7 +1865,8 @@ TEST_F(
     stream_id_list[idx] = ASSERT_RESULT(CreateDBStream(IMPLICIT));
     // set checkpoint for all the tablets.
     for (uint32_t jdx = 0; jdx < num_tablets; jdx++) {
-      auto resp_1 = ASSERT_RESULT(SetCDCCheckpoint(stream_id_list[idx], tablets, OpId::Min(), true, jdx));
+      auto resp_1 =
+          ASSERT_RESULT(SetCDCCheckpoint(stream_id_list[idx], tablets, OpId::Min(), true, jdx));
       ASSERT_FALSE(resp_1.has_error());
     }
   }
@@ -1880,7 +1882,8 @@ TEST_F(
   for (uint32_t idx = 0; idx < stream_id_list.size(); idx++) {
     ASSERT_EQ(DeleteCDCStream(stream_id_list[idx]), true);
     for (uint32_t jdx = 0; jdx < num_tablets; jdx++) {
-      VerifyStreamDeletedFromCdcState(test_client(), stream_id_list[idx], tablets.Get(jdx).tablet_id());
+      VerifyStreamDeletedFromCdcState(
+          test_client(), stream_id_list[idx], tablets.Get(jdx).tablet_id());
       VerifyTransactionParticipant(
           tablets.Get(jdx).tablet_id(), expected_opid_transaction_participant[idx]);
     }
