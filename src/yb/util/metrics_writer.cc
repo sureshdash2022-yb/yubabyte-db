@@ -108,7 +108,7 @@ Status PrometheusWriter::WriteSingleEntry(
   // LOG(INFO) << "suresh: name: " << name << " value: " << value;
 
   if (it == attr.end()) {
-    //LOG(INFO) << "suresh: name: " << name << " value: " << value;
+    // LOG(INFO) << "suresh: name: " << name << " value: " << value;
     return FlushSingleEntry(attr, name, value);
   }
   switch (aggregation_level_) {
