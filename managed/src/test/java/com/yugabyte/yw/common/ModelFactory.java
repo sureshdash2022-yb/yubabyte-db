@@ -52,6 +52,7 @@ import com.yugabyte.yw.models.Users.Role;
 import com.yugabyte.yw.models.common.Condition;
 import com.yugabyte.yw.models.common.Unit;
 import com.yugabyte.yw.models.configs.CustomerConfig;
+import com.yugabyte.yw.models.helpers.CloudSpecificInfo;
 import com.yugabyte.yw.models.helpers.NodeDetails;
 import com.yugabyte.yw.models.helpers.PlacementInfo;
 import com.yugabyte.yw.models.helpers.PlacementInfo.PlacementAZ;
@@ -204,6 +205,17 @@ public class ModelFactory {
       Common.CloudType cloudType,
       PlacementInfo pi,
       UUID rootCA) {
+    return createUniverse(universeName, universeUUID, customerId, cloudType, pi, rootCA, false);
+  }
+
+  public static Universe createUniverse(
+      String universeName,
+      UUID universeUUID,
+      long customerId,
+      Common.CloudType cloudType,
+      PlacementInfo pi,
+      UUID rootCA,
+      boolean enableYbc) {
     Customer c = Customer.get(customerId);
     // Custom setup a default AWS provider, can be overridden later.
     List<Provider> providerList = Provider.get(c.uuid, cloudType);
@@ -219,6 +231,18 @@ public class ModelFactory {
     params.nodeDetailsSet = new HashSet<>();
     params.nodePrefix = universeName;
     params.rootCA = rootCA;
+    params.enableYbc = enableYbc;
+    params.ybcInstalled = enableYbc;
+    if (enableYbc) {
+      params.ybcSoftwareVersion = "1.0.0-b1";
+      NodeDetails node = new NodeDetails();
+      node.cloudInfo = new CloudSpecificInfo();
+      node.cloudInfo.private_ip = "127.0.0.1";
+      params.nodeDetailsSet.add(node);
+      NodeDetails node2 = node.clone();
+      node2.cloudInfo.private_ip = "127.0.0.2";
+      params.nodeDetailsSet.add(node2);
+    }
     params.upsertPrimaryCluster(userIntent, pi);
     return Universe.create(params, customerId);
   }

@@ -265,6 +265,8 @@ Status RpcServerBase::SetupMessengerBuilder(rpc::MessengerBuilder* builder) {
   return Status::OK();
 }
 
+Status RpcServerBase::InitAutoFlags() { return Status::OK(); }
+
 Status RpcServerBase::Init() {
   CHECK(!initialized_);
 
@@ -375,13 +377,13 @@ void RpcServerBase::MetricsLoggingThread() {
     buf << "metrics " << GetCurrentTimeMicros() << " ";
 
     // Collect the metrics JSON string.
-    vector<string> metrics;
-    metrics.push_back("*");
+    MetricEntityOptions entity_opts;
+    entity_opts.metrics.push_back("*");
     MetricJsonOptions opts;
     opts.include_raw_histograms = true;
 
     JsonWriter writer(&buf, JsonWriter::COMPACT);
-    Status s = metric_registry_->WriteAsJson(&writer, metrics, opts);
+    Status s = metric_registry_->WriteAsJson(&writer, entity_opts, opts);
     if (!s.ok()) {
       WARN_NOT_OK(s, "Unable to collect metrics to log");
       next_log.AddDelta(kWaitBetweenFailures);
@@ -495,6 +497,8 @@ Status RpcAndWebServerBase::Init() {
   if (PREDICT_FALSE(FLAGS_TEST_simulate_port_conflict_error)) {
     return STATUS(NetworkError, "Simulated port conflict error");
   }
+
+  RETURN_NOT_OK(InitAutoFlags());
 
   RETURN_NOT_OK(RpcServerBase::Init());
 
@@ -611,6 +615,8 @@ void RpcAndWebServerBase::DisplayGeneralInfoIcons(std::stringstream* output) {
   DisplayIconTile(output, "fa-microchip", "Threads", "/threadz");
   // Drives.
   DisplayIconTile(output, "fa-hdd-o", "Drives", "/drives");
+  // TLS.
+  DisplayIconTile(output, "fa-lock", "TLS", "/tls");
 }
 
 Status RpcAndWebServerBase::DisplayRpcIcons(std::stringstream* output) {
@@ -642,6 +648,7 @@ Status RpcAndWebServerBase::Start() {
   AddRpczPathHandlers(messenger_.get(), web_server_.get());
   RegisterMetricsJsonHandler(web_server_.get(), metric_registry_.get());
   RegisterPathUsageHandler(web_server_.get(), fs_manager_.get());
+  RegisterTlsHandler(web_server_.get(), this);
   TracingPathHandlers::RegisterHandlers(web_server_.get());
   web_server_->RegisterPathHandler("/utilz", "Utilities",
                                    std::bind(&RpcAndWebServerBase::HandleDebugPage, this, _1, _2),

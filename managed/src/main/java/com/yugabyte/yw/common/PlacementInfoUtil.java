@@ -1570,12 +1570,15 @@ public class PlacementInfoUtil {
 
       if (index.action == Action.ADD) {
         boolean added = false;
-        // We can have some nodes in ToBeRemoved state, in such case we can simply
-        // revert their state back to the state from the stored universe.
+        // We can have some nodes in ToBeRemoved state, in such case, if it has the same instance
+        // type, we can simply revert their state back to the state from the stored universe.
         if (universe != null) {
           NodeDetails nodeDetails =
               findNodeInAz(
-                  node -> node.state == NodeState.ToBeRemoved,
+                  node ->
+                      node.state == NodeState.ToBeRemoved
+                          && Objects.equals(
+                              node.cloudInfo.instance_type, cluster.userIntent.instanceType),
                   nodesInCluster,
                   placementAZ.uuid,
                   true);
@@ -2357,16 +2360,22 @@ public class PlacementInfoUtil {
     String namespace = azConfig.get("KUBENAMESPACE");
     if (StringUtils.isBlank(namespace)) {
       int suffixLen = isMultiAZ ? azName.length() + 1 : 0;
-      String readClusterSuffix =
-          "-rr"; // Avoid using "-readcluster" so user has more room for specifying the name.
+      // Avoid using "-readcluster" so user has more room for
+      // specifying the name.
+      String readClusterSuffix = "-rr";
       if (isReadOnlyCluster) {
         suffixLen += readClusterSuffix.length();
       }
+      // We don't have any suffix in case of new naming.
+      suffixLen = newNamingStyle ? 0 : suffixLen;
       namespace = Util.sanitizeKubernetesNamespace(nodePrefix, suffixLen);
+      if (newNamingStyle) {
+        return namespace;
+      }
       if (isReadOnlyCluster) {
         namespace = String.format("%s%s", namespace, readClusterSuffix);
       }
-      if (isMultiAZ && !newNamingStyle) {
+      if (isMultiAZ) {
         namespace = String.format("%s-%s", namespace, azName);
       }
     }
@@ -2455,11 +2464,11 @@ public class PlacementInfoUtil {
               nodePrefix,
               az.code,
               az.getUnmaskedConfig(),
-              newNamingStyle, /*isReadOnlyCluster*/
-              false);
+              newNamingStyle,
+              false /*isReadOnlyCluster*/);
       String domain = azToDomain.get(entry.getKey());
       String helmFullName =
-          getHelmFullNameWithSuffix(isMultiAZ, nodePrefix, az.code, newNamingStyle);
+          getHelmFullNameWithSuffix(isMultiAZ, nodePrefix, az.code, newNamingStyle, false);
       for (int idx = 0; idx < entry.getValue(); idx++) {
         String master =
             String.format(
@@ -2490,17 +2499,40 @@ public class PlacementInfoUtil {
     return azToDomain;
   }
 
+  // This method decides the value of isMultiAZ based on the value of
+  // azName. In case of single AZ providers, the azName is passed as
+  // null.
+  public static String getHelmReleaseName(
+      String nodePrefix, String azName, boolean isReadOnlyCluster) {
+    boolean isMultiAZ = (azName != null);
+    return getHelmReleaseName(isMultiAZ, nodePrefix, azName, isReadOnlyCluster);
+  }
+
+  // TODO(bhavin192): have the release name sanitization call here,
+  // instead of doing it in KubernetesManager implementations.
+  public static String getHelmReleaseName(
+      boolean isMultiAZ, String nodePrefix, String azName, boolean isReadOnlyCluster) {
+    String helmReleaseName = isReadOnlyCluster ? nodePrefix + "-rr" : nodePrefix;
+    return isMultiAZ ? String.format("%s-%s", helmReleaseName, azName) : helmReleaseName;
+  }
+
   // Returns a string which is exactly the same as yugabyte chart's
   // helper template yugabyte.fullname. This is prefixed to all the
   // resource names when newNamingstyle is being used. We set
   // fullnameOverride in the Helm overrides.
   // https://git.io/yugabyte.fullname
   public static String getHelmFullNameWithSuffix(
-      boolean isMultiAZ, String nodePrefix, String azName, boolean newNamingStyle) {
+      boolean isMultiAZ,
+      String nodePrefix,
+      String azName,
+      boolean newNamingStyle,
+      boolean isReadOnlyCluster) {
     if (!newNamingStyle) {
       return "";
     }
-    String releaseName = isMultiAZ ? String.format("%s-%s", nodePrefix, azName) : nodePrefix;
+    String releaseName = getHelmReleaseName(isMultiAZ, nodePrefix, azName, isReadOnlyCluster);
+    // TODO(bhavin192): remove this once we make the sanitization to
+    // be 43 characters long.
     // <release name> | truncate 43
     if (releaseName.length() > 43) {
       releaseName = releaseName.substring(0, 43);
@@ -2791,6 +2823,18 @@ public class PlacementInfoUtil {
     public String getZone() {
       return getSecond();
     }
+  }
+
+  public static String getAZNameFromUUID(Provider provider, UUID azUUID) {
+    for (Region r : provider.regions) {
+      for (AvailabilityZone az : r.zones) {
+        if (az.uuid.equals(azUUID)) {
+          return az.name;
+        }
+      }
+    }
+    throw new IllegalArgumentException(
+        String.format("Provider %s doesn't have AZ with UUID %s", provider.name, azUUID));
   }
 
   /**

@@ -222,11 +222,6 @@ DEFINE_bool(tablet_enable_ttl_file_filter, false,
             "Enables compaction to directly delete files that have expired based on TTL, "
             "rather than removing them via the normal compaction process.");
 
-DEFINE_bool(enable_pessimistic_locking, false,
-            "If true, use pessimistic locking behavior in conflict resolution.");
-TAG_FLAG(enable_pessimistic_locking, evolving);
-TAG_FLAG(enable_pessimistic_locking, hidden);
-
 DEFINE_test_flag(int32, slowdown_backfill_by_ms, 0,
                  "If set > 0, slows down the backfill process by this amount.");
 
@@ -281,37 +276,19 @@ using namespace std::literals;  // NOLINT
 
 using rocksdb::WriteBatch;
 using rocksdb::SequenceNumber;
-using yb::tserver::WriteRequestPB;
-using yb::tserver::WriteResponsePB;
 using yb::docdb::KeyValueWriteBatchPB;
-using yb::tserver::ReadRequestPB;
-using yb::docdb::DocOperation;
-using yb::docdb::RedisWriteOperation;
-using yb::docdb::QLWriteOperation;
-using yb::docdb::PgsqlWriteOperation;
-using yb::docdb::DocDBCompactionFilterFactory;
-using yb::docdb::InitMarkerBehavior;
 
 namespace yb {
 namespace tablet {
 
-using consensus::MaximumOpId;
-using log::LogAnchorRegistry;
 using strings::Substitute;
-using base::subtle::Barrier_AtomicIncrement;
 
-using client::ChildTransactionData;
-using client::TransactionManager;
 using client::YBSession;
-using client::YBTransaction;
 using client::YBTablePtr;
 
 using docdb::DocKey;
-using docdb::DocPath;
 using docdb::DocRowwiseIterator;
-using docdb::DocWriteBatch;
 using docdb::SubDocKey;
-using docdb::PrimitiveValue;
 using docdb::StorageDbType;
 
 const std::hash<std::string> hash_for_data_root_dir;
@@ -464,9 +441,9 @@ Tablet::Tablet(const TabletInitData& data)
       (is_sys_catalog_ || transactional)) {
     transaction_participant_ = std::make_unique<TransactionParticipant>(
         data.transaction_participant_context, this, tablet_metrics_entity_);
-    if (ANNOTATE_UNPROTECTED_READ(FLAGS_enable_pessimistic_locking)) {
+    if (data.waiting_txn_registry) {
       wait_queue_ = std::make_unique<docdb::WaitQueue>(
-        transaction_participant_.get(), metadata_->fs_manager()->uuid());
+        transaction_participant_.get(), metadata_->fs_manager()->uuid(), data.waiting_txn_registry);
     }
   }
 
@@ -1582,8 +1559,7 @@ Result<bool> Tablet::HasScanReachedMaxPartitionKey(
     // For batched index lookup of ybctids, check if the current partition hash is lesser than
     // upper bound. If it is, we can then avoid paging. Paging of batched index lookup of ybctids
     // occur when tablets split after request is prepared.
-    if (pgsql_read_request.has_ybctid_column_value() &&
-        implicit_cast<size_t>(pgsql_read_request.batch_arguments_size()) > row_count) {
+    if (implicit_cast<size_t>(pgsql_read_request.batch_arguments_size()) > row_count) {
       if (!pgsql_read_request.upper_bound().has_key()) {
           return false;
       }
@@ -3544,10 +3520,10 @@ const std::string& Tablet::tablet_id() const {
   return metadata_->raft_group_id();
 }
 
-Result<std::string> Tablet::GetEncodedMiddleSplitKey() const {
+Result<std::string> Tablet::GetEncodedMiddleSplitKey(std::string *partition_split_key) const {
   auto error_prefix = [this]() {
     return Format(
-        "Failed to detect middle key for tablet $0 (key_bounds: $1 - $2)",
+        "Failed to detect middle key for tablet $0 (key_bounds: \"$1\" - \"$2\")",
         tablet_id(),
         Slice(key_bounds_.lower).ToDebugHexString(),
         Slice(key_bounds_.upper).ToDebugHexString());
@@ -3598,6 +3574,31 @@ Result<std::string> Tablet::GetEncodedMiddleSplitKey() const {
         tserver::TabletServerError(tserver::TabletServerErrorPB::TABLET_SPLIT_KEY_RANGE_TOO_SMALL),
         "$0: got \"$1\".", error_prefix(), middle_key_slice.ToDebugHexString());
   }
+
+  // Check middle_key fits tablet's partition bounds
+  const Slice partition_start(metadata()->partition()->partition_key_start());
+  const Slice partition_end(metadata()->partition()->partition_key_end());
+  std::string middle_hash_key;
+  if (metadata()->partition_schema()->IsHashPartitioning()) {
+    const auto doc_key_hash = VERIFY_RESULT(docdb::DecodeDocKeyHash(middle_key));
+    if (doc_key_hash.has_value()) {
+      middle_hash_key = PartitionSchema::EncodeMultiColumnHashValue(doc_key_hash.value());
+      if (partition_split_key) {
+        *partition_split_key = middle_hash_key;
+      }
+    }
+  }
+  const Slice partition_middle_key(middle_hash_key.size() ? middle_hash_key : middle_key);
+  if (partition_middle_key.compare(partition_start) <= 0 ||
+      (!partition_end.empty() && partition_middle_key.compare(partition_end) >= 0)) {
+    // This error occurs when middle key is not strictly between partition bounds.
+    return STATUS_EC_FORMAT(IllegalState,
+        tserver::TabletServerError(tserver::TabletServerErrorPB::TABLET_SPLIT_KEY_RANGE_TOO_SMALL),
+        "$0 with partition bounds (\"$1\" - \"$2\"): got \"$3\".",
+        error_prefix(), partition_start.ToDebugHexString(), partition_end.ToDebugHexString(),
+        middle_key_slice.ToDebugHexString());
+  }
+
   return middle_key;
 }
 

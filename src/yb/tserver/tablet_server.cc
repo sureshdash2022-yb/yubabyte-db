@@ -41,7 +41,9 @@
 
 #include <glog/logging.h>
 
+#include "yb/client/auto_flags_manager.h"
 #include "yb/client/client.h"
+#include "yb/client/client_fwd.h"
 #include "yb/client/transaction_manager.h"
 #include "yb/client/universe_key_client.h"
 
@@ -157,14 +159,16 @@ DEFINE_int32(tserver_yb_client_default_timeout_ms, kTServerYbClientDefaultTimeou
              "Default timeout for the YBClient embedded into the tablet server that is used "
              "for distributed transactions.");
 
+DEFINE_test_flag(bool, select_all_status_tablets, false, "");
+
 namespace yb {
 namespace tserver {
 
 TabletServer::TabletServer(const TabletServerOptions& opts)
-    : DbServerBase(
-          "TabletServer", opts, "yb.tabletserver", server::CreateMemTrackerForServer()),
+    : DbServerBase("TabletServer", opts, "yb.tabletserver", server::CreateMemTrackerForServer()),
       fail_heartbeats_for_tests_(false),
       opts_(opts),
+      auto_flags_manager_(new AutoFlagsManager("yb-tserver", fs_manager_.get())),
       tablet_manager_(new TSTabletManager(fs_manager_.get(), this, metric_registry())),
       path_handlers_(new TabletServerPathHandlers(this)),
       maintenance_manager_(new MaintenanceManager(MaintenanceManager::DEFAULT_OPTIONS)),
@@ -329,6 +333,23 @@ Status TabletServer::Init() {
   return Status::OK();
 }
 
+Status TabletServer::InitAutoFlags() {
+  if (!VERIFY_RESULT(auto_flags_manager_->LoadFromFile())) {
+    RETURN_NOT_OK(auto_flags_manager_->LoadFromMaster(
+        options_.HostsString(), *opts_.GetMasterAddresses(), ApplyNonRuntimeAutoFlags::kTrue));
+  }
+
+  return Status::OK();
+}
+
+uint32_t TabletServer::GetAutoFlagConfigVersion() const {
+  return auto_flags_manager_->GetConfigVersion();
+}
+
+AutoFlagsConfigPB TabletServer::TEST_GetAutoFlagConfig() const {
+  return auto_flags_manager_->GetConfig();
+}
+
 Status TabletServer::GetRegistration(ServerRegistrationPB* reg, server::RpcOnly rpc_only) const {
   RETURN_NOT_OK(RpcAndWebServerBase::GetRegistration(reg, rpc_only));
   reg->set_pg_port(pgsql_proxy_bind_address().port());
@@ -389,7 +410,8 @@ Status TabletServer::RegisterServices() {
 
   std::unique_ptr<ServiceIf> remote_bootstrap_service =
       std::make_unique<RemoteBootstrapServiceImpl>(
-          fs_manager_.get(), tablet_manager_.get(), metric_entity());
+          fs_manager_.get(), tablet_manager_.get(), metric_entity(), this->MakeCloudInfoPB(),
+          &this->proxy_cache());
   LOG(INFO) << "yb::tserver::RemoteBootstrapServiceImpl created at " <<
     remote_bootstrap_service.get();
   RETURN_NOT_OK(RpcAndWebServerBase::RegisterService(FLAGS_ts_remote_bootstrap_svc_queue_length,
@@ -475,17 +497,14 @@ Status TabletServer::GetLiveTServers(
 Status TabletServer::GetTabletStatus(const GetTabletStatusRequestPB* req,
                                      GetTabletStatusResponsePB* resp) const {
   VLOG(3) << "GetTabletStatus called for tablet " << req->tablet_id();
-  tablet::TabletPeerPtr peer;
-  if (!tablet_manager_->LookupTablet(req->tablet_id(), &peer)) {
-    return STATUS(NotFound, "Tablet not found", req->tablet_id());
-  }
-  peer->GetTabletStatusPB(resp->mutable_tablet_status());
+  auto tablet_peer = VERIFY_RESULT(tablet_manager_->GetTablet(req->tablet_id()));
+  tablet_peer->GetTabletStatusPB(resp->mutable_tablet_status());
   return Status::OK();
 }
 
 bool TabletServer::LeaderAndReady(const TabletId& tablet_id, bool allow_stale) const {
-  tablet::TabletPeerPtr peer;
-  if (!tablet_manager_->LookupTablet(tablet_id, &peer)) {
+  auto peer = tablet_manager_->LookupTablet(tablet_id);
+  if (!peer) {
     return false;
   }
   return peer->LeaderStatus(allow_stale) == consensus::LeaderStatus::LEADER_AND_READY;
@@ -662,6 +681,9 @@ client::TransactionPool& TabletServer::TransactionPool() {
 }
 
 client::LocalTabletFilter TabletServer::CreateLocalTabletFilter() {
+  if (FLAGS_TEST_select_all_status_tablets) {
+    return client::LocalTabletFilter();
+  }
   return std::bind(&TSTabletManager::PreserveLocalLeadersOnly, tablet_manager(), _1);
 }
 

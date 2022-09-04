@@ -21,6 +21,8 @@
 
 #include "yb/docdb/docdb_fwd.h"
 
+#include "yb/integration-tests/cluster_itest_util.h"
+
 #include "yb/master/catalog_manager_if.h"
 
 #include "yb/tablet/tablet_fwd.h"
@@ -163,6 +165,8 @@ class TabletSplitITest : public TabletSplitITestBase<MiniCluster> {
 
   Result<TabletId> SplitSingleTablet(docdb::DocKeyHash split_hash_code);
 
+  Result<master::SplitTabletResponsePB> SplitSingleTablet(const TabletId& tablet_id);
+
   Result<TabletId> SplitTabletAndValidate(
       docdb::DocKeyHash split_hash_code,
       size_t num_rows,
@@ -228,6 +232,9 @@ class TabletSplitExternalMiniClusterITest : public TabletSplitITestBase<External
   Status WaitForTablets(size_t num_tablets, size_t tserver_idx);
 
   Status WaitForTablets(size_t num_tablets);
+
+  Status WaitTServerToBeQuietOnTablet(
+      itest::TServerDetails* const ts_desc, const TabletId& tablet_id);
 
   Status SplitTabletCrashMaster(bool change_split_boundary, string* split_partition_key);
 

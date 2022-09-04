@@ -107,6 +107,8 @@ public enum TaskType {
 
   RemoveNodeFromUniverse("RemoveNodeFromUniverse"),
 
+  RebootNodeInUniverse("RebootNodeInUniverse"),
+
   ReleaseInstanceFromUniverse("ReleaseInstanceFromUniverse"),
 
   RotateAccessKey("RotateAccessKey"),
@@ -207,6 +209,8 @@ public enum TaskType {
 
   UpdateSoftwareVersion("subtasks.UpdateSoftwareVersion"),
 
+  UpdateUniverseYbcDetails("subtasks.UpdateUniverseYbcDetails"),
+
   VerifyNodeSSHAccess("subtasks.VerifyNodeSSHAccess"),
 
   WaitForDataMove("subtasks.WaitForDataMove"),
@@ -264,6 +268,8 @@ public enum TaskType {
 
   XClusterConfigUpdateMasterAddresses("subtasks.xcluster.XClusterConfigUpdateMasterAddresses"),
 
+  XClusterInfoPersist("subtasks.xcluster.XClusterInfoPersist"),
+
   // Tasks belonging to subtasks.cloud classpath
   CloudAccessKeyCleanup("subtasks.cloud.CloudAccessKeyCleanup"),
 
@@ -294,6 +300,8 @@ public enum TaskType {
   RestoreUniverseKeys("subtasks.RestoreUniverseKeys"),
 
   RestoreUniverseKeysYb("subtasks.RestoreUniverseKeysYb"),
+
+  RestoreUniverseKeysYbc("subtasks.RestoreUniverseKeysYbc"),
 
   WaitForLeadersOnPreferredOnly("subtasks.WaitForLeadersOnPreferredOnly"),
 
@@ -364,7 +372,19 @@ public enum TaskType {
 
   RebootServer("subtasks.RebootServer"),
 
-  RunHooks("subtasks.RunHooks");
+  RunHooks("subtasks.RunHooks"),
+
+  UpdateUniverseTags("subtasks.UpdateUniverseTags"),
+
+  UpgradeYbc("subtasks.UpgradeYbc"),
+
+  InstallYbcSoftware("InstallYbcSoftware"),
+
+  UpgradeUniverseYbc("UpgradeUniverseYbc"),
+
+  DisableYbc("DisableYbc"),
+
+  InstanceExistCheck("subtasks.InstanceExistCheck");
 
   private String relativeClassPath;
 

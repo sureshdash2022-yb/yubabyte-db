@@ -31,11 +31,11 @@ public class NodeDetailsTest {
         allOf(
             notNullValue(),
             equalTo(
-                "name: host-n1, cloudInfo: az-1.test-region.aws, type: "
+                "{name: host-n1, cloudInfo: az-1.test-region.aws, type: "
                     + ApiUtils.UTIL_INST_TYPE
                     + ", ip: 10.0.0.1, "
                     + "isMaster: false, isTserver: true, state: Live, "
-                    + "azUuid: null, placementUuid: null")));
+                    + "azUuid: null, placementUuid: null}")));
   }
 
   @Test
@@ -55,7 +55,6 @@ public class NodeDetailsTest {
     activeStates.add(NodeDetails.NodeState.Stopping);
     activeStates.add(NodeDetails.NodeState.Resizing);
     activeStates.add(NodeDetails.NodeState.Reprovisioning);
-    activeStates.add(NodeDetails.NodeState.Rebooting);
     for (NodeDetails.NodeState state : NodeDetails.NodeState.values()) {
       nd.state = state;
       if (activeStates.contains(state)) {

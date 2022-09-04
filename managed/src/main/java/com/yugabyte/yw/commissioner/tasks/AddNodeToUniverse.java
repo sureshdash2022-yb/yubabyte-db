@@ -27,7 +27,9 @@ import com.yugabyte.yw.models.NodeInstance;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.helpers.NodeDetails;
 import com.yugabyte.yw.models.helpers.NodeDetails.NodeState;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -130,7 +132,14 @@ public class AddNodeToUniverse extends UniverseDefinitionTaskBase {
                   });
         }
       }
+
       Set<NodeDetails> nodeSet = Collections.singleton(currentNode);
+
+      if (!wasDecommissioned) {
+        // Validate instance existence and connectivity before changing the state.
+        createInstanceExistsCheckTasks(universe.universeUUID, nodeSet);
+      }
+
       // Update Node State to being added.
       createSetNodeStateTask(currentNode, NodeState.Adding)
           .setSubTaskGroupType(SubTaskGroupType.StartingNode);
@@ -202,6 +211,10 @@ public class AddNodeToUniverse extends UniverseDefinitionTaskBase {
       createWaitForServersTasks(nodeSet, ServerType.TSERVER)
           .setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
 
+      if (universe.isYbcEnabled()) {
+        createStartYbcProcessTasks(nodeSet);
+      }
+
       // Update the swamper target file.
       createSwamperTargetUpdateTask(false /* removeFile */);
 
@@ -210,6 +223,9 @@ public class AddNodeToUniverse extends UniverseDefinitionTaskBase {
         createModifyBlackListTask(nodeSet, false /* isAdd */, false /* isLeaderBlacklist */)
             .setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
       }
+
+      // Wait for the master leader to hear from all tservers.
+      createWaitForTServerHeartBeatsTask().setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
 
       // Wait for load to balance.
       createWaitForLoadBalanceTask().setSubTaskGroupType(SubTaskGroupType.WaitForDataMigration);

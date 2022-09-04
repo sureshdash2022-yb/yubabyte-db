@@ -170,7 +170,7 @@
 #include "yb/util/countdown_latch.h"
 #include "yb/util/debug-util.h"
 #include "yb/util/debug/trace_event.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/format.h"
 #include "yb/util/hash_util.h"
 #include "yb/util/locks.h"
@@ -392,6 +392,9 @@ DEFINE_double(heartbeat_safe_deadline_ratio, .20,
 DECLARE_int32(heartbeat_rpc_timeout_ms);
 DECLARE_CAPABILITY(TabletReportLimit);
 
+DEFINE_test_flag(int32, num_missing_tablets, 0, "Simulates missing tablets in a table");
+TAG_FLAG(TEST_num_missing_tablets, runtime);
+
 DEFINE_int32(partitions_vtable_cache_refresh_secs, 0,
              "Amount of time to wait before refreshing the system.partitions cached vtable. "
              "If generate_partitions_vtable_on_changes is set, then this background task will "
@@ -402,6 +405,11 @@ DEFINE_int32(txn_table_wait_min_ts_count, 1,
              " Default value is 1. We wait for atleast --replication_factor if this value"
              " is smaller than that");
 TAG_FLAG(txn_table_wait_min_ts_count, advanced);
+
+// TODO (mbautin, 2019-12): switch the default to true after updating all external callers
+// (yb-ctl, YugaWare) and unit tests.
+DEFINE_bool(master_auto_run_initdb, false,
+            "Automatically run initdb on master leader initialization");
 
 DEFINE_bool(enable_ysql_tablespaces_for_placement, true,
             "If set, tablespaces will be used for placement of YSQL tables.");
@@ -471,6 +479,11 @@ DEFINE_bool(enable_delete_truncate_xcluster_replicated_table, false,
             "When set, enables deleting/truncating tables currently in xCluster replication");
 TAG_FLAG(enable_delete_truncate_xcluster_replicated_table, runtime);
 
+DEFINE_bool(xcluster_wait_on_ddl_alter, false,
+            "When xCluster replication sends a DDL change, wait for the user to enter a "
+            "compatible/matching entry.  Note: Can also set at runtime to resume after stall.");
+TAG_FLAG(xcluster_wait_on_ddl_alter, runtime);
+
 DEFINE_test_flag(bool, sequential_colocation_ids, false,
                  "When set, colocation IDs will be assigned sequentially (starting from 20001) "
                  "rather than at random. This is especially useful for making pg_regress "
@@ -499,6 +512,10 @@ TAG_FLAG(batch_ysql_system_tables_metadata, runtime);
 DEFINE_test_flag(bool, pause_split_child_registration,
                  false, "Pause split after registering one child");
 TAG_FLAG(TEST_pause_split_child_registration, runtime);
+
+DEFINE_test_flag(bool, keep_docdb_table_on_ysql_drop_table, false,
+                 "When enabled does not delete tables from the docdb layer, resulting in YSQL "
+                 "tables only being dropped in the postgres layer.");
 
 namespace yb {
 namespace master {
@@ -849,6 +866,8 @@ Status CatalogManager::Init() {
   }
 
   // Initialize the metrics emitted by the catalog manager.
+  load_balance_policy_->InitMetrics();
+
   metric_num_tablet_servers_live_ =
     METRIC_num_tablet_servers_live.Instantiate(master_->metric_entity_cluster(), 0);
 
@@ -1017,6 +1036,51 @@ Status CatalogManager::WaitForWorkerPoolTests(const MonoDelta& timeout) const {
   return Status::OK();
 }
 
+Status CatalogManager::GetTableDiskSize(const GetTableDiskSizeRequestPB* req,
+                                        GetTableDiskSizeResponsePB *resp,
+                                        rpc::RpcContext* rpc) {
+  auto table_id = req->table().table_id();
+
+  const auto table_info = GetTableInfo(table_id);
+  if (!table_info) {
+    auto s = STATUS_SUBSTITUTE(NotFound, "Table with id $0 does not exist", table_id);
+    return SetupError(resp->mutable_error(), MasterErrorPB::OBJECT_NOT_FOUND, s);
+  }
+
+  int64 table_size = 0;
+  int32 num_missing_tablets = 0;
+  if (!table_info->IsColocatedUserTable()) {
+    // Colocated user tables do not have size info
+
+    // Set missing tablets if test flag is set
+    num_missing_tablets =
+        PREDICT_FALSE(FLAGS_TEST_num_missing_tablets > 0) ? FLAGS_TEST_num_missing_tablets : 0;
+
+    const auto tablets = table_info->GetTablets();
+    for (const auto& tablet : tablets) {
+      const auto drive_info_result = tablet->GetLeaderReplicaDriveInfo();
+      if (drive_info_result.ok()) {
+        const auto& drive_info = drive_info_result.get();
+        VLOG(4)
+            << "tablet " << tablet->ToString()
+            << " WAL file size: " << drive_info.wal_files_size
+            << "\ntablet " << tablet->ToString()
+            << " SST file size: " << drive_info.sst_files_size;
+
+        table_size += drive_info.wal_files_size;
+        table_size += drive_info.sst_files_size;
+      } else {
+        ++num_missing_tablets;
+      }
+    }
+  }
+
+  resp->set_size(table_size);
+  resp->set_num_missing_tablets(num_missing_tablets);
+
+  return Status::OK();
+}
+
 Status CatalogManager::VisitSysCatalog(int64_t term) {
   // Block new catalog operations, and wait for existing operations to finish.
   LOG_WITH_PREFIX_AND_FUNC(INFO)
@@ -1148,7 +1212,7 @@ Status CatalogManager::VisitSysCatalog(int64_t term) {
     });
   }
 
-  if (!StartRunningInitDbIfNeeded(term)) {
+  if (!VERIFY_RESULT(StartRunningInitDbIfNeeded(term))) {
     // If we are not running initdb, this is an existing cluster, and we need to check whether we
     // need to do a one-time migration to make YSQL system catalog tables transactional.
     RETURN_NOT_OK(MakeYsqlSysCatalogTablesTransactional(
@@ -1201,11 +1265,8 @@ Status CatalogManager::RunLoaders(int64_t term) {
   // Clear transaction tables config.
   transaction_tables_config_.reset();
 
-  // Clear recent tasks.
-  tasks_tracker_->Reset();
-
-  // Clear recent jobs.
-  jobs_tracker_->Reset();
+  // Clear recent jobs/tasks.
+  ResetTasksTrackers();
 
   std::vector<std::shared_ptr<TSDescriptor>> descs;
   master_->ts_manager()->GetAllDescriptors(&descs);
@@ -1366,10 +1427,31 @@ Status CatalogManager::PrepareDefaultSysConfig(int64_t term) {
   return Status::OK();
 }
 
-bool CatalogManager::StartRunningInitDbIfNeeded(int64_t term) {
-  if (!ShouldAutoRunInitDb(ysql_catalog_config_.get(), pg_proc_exists_)) {
+Result<bool> CatalogManager::StartRunningInitDbIfNeeded(int64_t term) {
+  {
+    auto l = ysql_catalog_config_->LockForRead();
+    if (l->pb.ysql_catalog_config().initdb_done()) {
+      LOG(INFO) << "Cluster configuration indicates that initdb has already completed";
+      return false;
+    }
+  }
+
+  if (pg_proc_exists_.load(std::memory_order_acquire)) {
+    LOG(INFO) << "Table pg_proc exists, assuming initdb has already been run";
+    // Mark initdb as done, in case it was done externally.
+    // We assume pg_proc table means initdb is done.
+    // We do NOT handle the case when initdb was terminated mid-run (neither here nor in
+    // MakeYsqlSysCatalogTablesTransactional).
+    RETURN_NOT_OK(InitDbFinished(Status::OK(), term));
     return false;
   }
+
+  if (!FLAGS_master_auto_run_initdb) {
+    LOG(INFO) << "--master_auto_run_initdb is set to false, not running initdb";
+    return false;
+  }
+
+  LOG(INFO) << "initdb has never been run on this cluster, running it";
 
   string master_addresses_str = MasterAddressesToString(
       *master_->opts().GetMasterAddresses());
@@ -1795,6 +1877,7 @@ Status CatalogManager::CheckIsLeaderAndReady() const {
 }
 
 std::shared_ptr<tablet::TabletPeer> CatalogManager::tablet_peer() const {
+  DCHECK(sys_catalog_);
   return sys_catalog_->tablet_peer();
 }
 
@@ -1866,9 +1949,7 @@ void CatalogManager::CompleteShutdown() {
     sys_catalog_->CompleteShutdown();
   }
 
-  // Reset the jobs/tasks tracker.
-  tasks_tracker_->Reset();
-  jobs_tracker_->Reset();
+  ResetTasksTrackers();
 
   if (initdb_future_ && initdb_future_->wait_for(0s) != std::future_status::ready) {
     LOG(WARNING) << "initdb is still running, waiting for it to complete.";
@@ -1949,6 +2030,24 @@ Result<ReplicationInfoPB> CatalogManager::GetTableReplicationInfo(
   // Neither table nor tablespace info set. Return cluster level replication info.
   auto l = ClusterConfig()->LockForRead();
   return l->pb.replication_info();
+}
+
+Result<ReplicationInfoPB> CatalogManager::GetTableReplicationInfo(
+    const scoped_refptr<const TableInfo>& table) const {
+  {
+    auto table_lock = table->LockForRead();
+    if (table_lock->pb.has_replication_info()) {
+      return table_lock->pb.replication_info();
+    }
+  }
+
+  auto replication_info_opt = VERIFY_RESULT(
+      GetTablespaceManager()->GetTableReplicationInfo(table));
+  if (replication_info_opt) {
+    return replication_info_opt.value();
+  }
+
+  return ClusterConfig()->LockForRead()->pb.replication_info();
 }
 
 std::shared_ptr<YsqlTablespaceManager> CatalogManager::GetTablespaceManager() const {
@@ -2553,8 +2652,10 @@ Result<std::array<PartitionPB, kNumSplitParts>> CreateNewTabletsPartition(
         InvalidArgument,
         "Can't split tablet $0 (partition_key_start: $1 partition_key_end: $2) by partition "
         "boundary (split_key: $3)",
-        tablet_info.tablet_id(), source_partition.partition_key_start(),
-        source_partition.partition_key_end(), split_partition_key);
+        tablet_info.tablet_id(),
+        FormatBytesAsStr(source_partition.partition_key_start()),
+        FormatBytesAsStr(source_partition.partition_key_end()),
+        FormatBytesAsStr(split_partition_key));
   }
 
   std::array<PartitionPB, kNumSplitParts> new_tablets_partition;
@@ -2603,25 +2704,6 @@ Status CatalogManager::TEST_SendTestRetryRequest(
   return ScheduleTask(task);
 }
 
-Result<ReplicationInfoPB> CatalogManager::GetTableReplicationInfo(
-    const TabletInfo& tablet_info) const {
-  auto table = tablet_info.table();
-  {
-    auto table_lock = table->LockForRead();
-    if (table_lock->pb.has_replication_info()) {
-      return table_lock->pb.replication_info();
-    }
-  }
-
-  auto replication_info_opt = VERIFY_RESULT(
-      GetTablespaceManager()->GetTableReplicationInfo(table));
-  if (replication_info_opt) {
-    return replication_info_opt.value();
-  }
-
-  return ClusterConfig()->LockForRead()->pb.replication_info();
-}
-
 bool CatalogManager::ShouldSplitValidCandidate(
     const TabletInfo& tablet_info, const TabletReplicaDriveInfo& drive_info) const {
   if (drive_info.may_have_orphaned_post_split_data) {
@@ -2635,7 +2717,7 @@ bool CatalogManager::ShouldSplitValidCandidate(
   TSDescriptorVector ts_descs = GetAllLiveNotBlacklistedTServers();
 
   size_t num_servers = 0;
-  auto table_replication_info_or_status = GetTableReplicationInfo(tablet_info);
+  auto table_replication_info_or_status = GetTableReplicationInfo(tablet_info.table());
 
   // If there is custom placement information present then
   // only count the tservers which the table has access to
@@ -2856,8 +2938,12 @@ Status CatalogManager::ValidateSplitCandidate(
       *tablet->table(), ignore_disabled_list));
 
   const IgnoreTtlValidation ignore_ttl_validation { is_manual_split.get() };
+
+  const TabletId parent_id = tablet->LockForRead()->pb.split_parent_tablet_id();
+  auto parent_result = GetTabletInfo(parent_id);
+  TabletInfoPtr parent = parent_result.ok() ? parent_result.get() : nullptr;
   return tablet_split_manager_.ValidateSplitCandidateTablet(
-      *tablet, ignore_ttl_validation, ignore_disabled_list);
+      *tablet, parent, ignore_ttl_validation, ignore_disabled_list);
 }
 
 Status CatalogManager::DeleteNotServingTablet(
@@ -5242,6 +5328,11 @@ Status CatalogManager::DeleteTable(
 
   scoped_refptr<TableInfo> table = VERIFY_RESULT(FindTable(req->table()));
 
+  if (PREDICT_FALSE(FLAGS_TEST_keep_docdb_table_on_ysql_drop_table) &&
+      table->GetTableType() == PGSQL_TABLE_TYPE) {
+    return Status::OK();
+  }
+
   // For now, only disable dropping YCQL tables under xCluster replication.
   bool result = table->GetTableType() == YQL_TABLE_TYPE && IsCdcEnabled(*table);
   if (!FLAGS_enable_delete_truncate_xcluster_replicated_table && result) {
@@ -5959,6 +6050,10 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB* req,
     has_changes = true;
   }
 
+  if (req->increment_schema_version()) {
+    has_changes = true;
+  }
+
   // TODO(hector): Simplify the AlterSchema workflow to avoid doing the same checks on every layer
   // this request goes through: https://github.com/YugaByte/yugabyte-db/issues/1882.
   if (req->has_wal_retention_secs()) {
@@ -5992,6 +6087,14 @@ Status CatalogManager::AlterTable(const AlterTableRequestPB* req,
       MultiStageAlterTable::CopySchemaDetailsToFullyApplied(&table_pb);
     }
     SchemaToPB(new_schema, table_pb.mutable_schema());
+  }
+
+
+  if (FLAGS_xcluster_wait_on_ddl_alter &&
+      [&]() {SharedLock lock(mutex_); return IsTableCdcConsumer(*table);}()) {
+    // If we're waiting for a Schema because we saw the a replication source with a change,
+    // ensure this alter is compatible with what we're expecting.
+    RETURN_NOT_OK(ValidateNewSchemaWithCdc(*table, new_schema));
   }
 
   // Only increment the version number if it is a schema change (AddTable change goes through a
@@ -6159,13 +6262,14 @@ Status CatalogManager::GetTableSchemaInternal(const GetTableSchemaRequestPB* req
   auto l = table->LockForRead();
   RETURN_NOT_OK(CatalogManagerUtil::CheckIfTableDeletedOrNotVisibleToClient(l, resp));
 
-  if (l->pb.has_fully_applied_schema()) {
+  if (get_fully_applied_indexes && l->pb.has_fully_applied_schema()) {
     // An AlterTable is in progress; fully_applied_schema is the last
     // schema that has reached every TS.
     DCHECK(l->pb.state() == SysTablesEntryPB::ALTERING);
     resp->mutable_schema()->CopyFrom(l->pb.fully_applied_schema());
   } else {
-    // There's no AlterTable, the regular schema is "fully applied".
+    // Case 1: There's no AlterTable, the regular schema is "fully applied".
+    // Case 2: get_fully_applied_indexes == false (for YCQL). Always return the latest schema.
     resp->mutable_schema()->CopyFrom(l->pb.schema());
   }
 
@@ -6682,10 +6786,10 @@ bool CatalogManager::ProcessCommittedConsensusState(
     TSDescriptor* ts_desc,
     bool is_incremental,
     const ReportedTabletPB& report,
-    const std::map<TableId, TableInfo::WriteLock>& table_write_locks,
+    std::map<TableId, TableInfo::WriteLock>* table_write_locks,
     const TabletInfoPtr& tablet,
     const TabletInfo::WriteLock& tablet_lock,
-    const std::map<TableId, scoped_refptr<TableInfo>>& tables,
+    std::map<TableId, scoped_refptr<TableInfo>>* tables,
     std::vector<RetryingTSRpcTaskPtr>* rpcs) {
   const ConsensusStatePB& prev_cstate = tablet_lock->pb.committed_consensus_state();
   ConsensusStatePB cstate = report.committed_consensus_state();
@@ -6836,8 +6940,8 @@ bool CatalogManager::ProcessCommittedConsensusState(
   }
 
   // 7. Send an AlterSchema RPC if the tablet has an old schema version.
-  if (table_write_locks.count(tablet->table()->id())) {
-    const TableInfo::WriteLock& table_lock = table_write_locks.at(tablet->table()->id());
+  if (table_write_locks->count(tablet->table()->id())) {
+    const TableInfo::WriteLock& table_lock = (*table_write_locks)[tablet->table()->id()];
     if (report.has_schema_version() &&
         report.schema_version() != table_lock->pb.version()) {
       if (report.schema_version() > table_lock->pb.version()) {
@@ -6854,24 +6958,33 @@ bool CatalogManager::ProcessCommittedConsensusState(
                   << ". Expected version " << table_lock->pb.version()
                   << " got " << report.schema_version();
       }
-      // It's possible that the tablet being reported is a laggy replica, and in fact
-      // the leader has already received an AlterTable RPC. That's OK, though --
-      // it'll safely ignore it if we send another.
-      TransactionId txn_id = TransactionId::Nil();
-      if (table_lock->pb.has_transaction() &&
-          table_lock->pb.transaction().has_transaction_id()) {
-        LOG(INFO) << "Parsing transaction ID for tablet ID " << tablet->tablet_id();
-        auto txn_id_res = FullyDecodeTransactionId(table_lock->pb.transaction().transaction_id());
-        if (!txn_id_res.ok()) {
-          LOG(WARNING) << "Parsing transaction ID failed for tablet ID " << tablet->tablet_id();
-          return false;
+      // All metadata related changes for the tablet is passed as part of RESTORE_ON_TABLET rpcs
+      // and we should not trigger anything else during restore so as to not race schema versions.
+      // TODO(Sanket): What if restore is stuck then this block is muted forever.
+      auto restore_result = IsTableUndergoingPitrRestore(*tablet->table());
+      LOG_IF(DFATAL, !restore_result.ok())
+          << "Failed to determine if table has PITR restore in progress";
+      if (!restore_result.ok() || !*restore_result) {
+        // It's possible that the tablet being reported is a laggy replica, and in fact
+        // the leader has already received an AlterTable RPC. That's OK, though --
+        // it'll safely ignore it if we send another.
+        TransactionId txn_id = TransactionId::Nil();
+        if (table_lock->pb.has_transaction() &&
+            table_lock->pb.transaction().has_transaction_id()) {
+          LOG(INFO) << "Parsing transaction ID for tablet ID " << tablet->tablet_id();
+          auto txn_id_res = FullyDecodeTransactionId(
+              table_lock->pb.transaction().transaction_id());
+          if (!txn_id_res.ok()) {
+            LOG(WARNING) << "Parsing transaction ID failed for tablet ID " << tablet->tablet_id();
+            return false;
+          }
+          txn_id = txn_id_res.get();
         }
-        txn_id = txn_id_res.get();
+        LOG(INFO) << "Triggering AlterTable with transaction ID " << txn_id
+                  << " due to heartbeat delay for tablet ID " << tablet->tablet_id();
+        rpcs->push_back(std::make_shared<AsyncAlterTable>(
+            master_, AsyncTaskPool(), tablet, tablet->table(), txn_id));
       }
-      LOG(INFO) << "Triggering AlterTable with transaction ID " << txn_id
-                << " due to heartbeat delay for tablet ID " << tablet->tablet_id();
-      rpcs->push_back(std::make_shared<AsyncAlterTable>(
-          master_, AsyncTaskPool(), tablet, tablet->table(), txn_id));
     }
   }
 
@@ -6881,8 +6994,8 @@ bool CatalogManager::ProcessCommittedConsensusState(
     if (tablet->table()->id() == id_to_version.first) {
       continue;
     }
-    if (tables.count(id_to_version.first)) {
-      const auto& table_lock = table_write_locks.at(id_to_version.first);
+    if (tables->count(id_to_version.first)) {
+      const auto& table_lock = (*table_write_locks)[id_to_version.first];
       // Ignore if same version.
       if (table_lock->pb.version() == id_to_version.second) {
         continue;
@@ -6900,10 +7013,19 @@ bool CatalogManager::ProcessCommittedConsensusState(
                   << ". Expected version " << table_lock->pb.version()
                   << " got " << id_to_version.second;
       }
-      LOG(INFO) << "Triggering AlterTable for table id " << id_to_version.first
-                << " due to heartbeat delay for tablet ID " << tablet->tablet_id();
-      rpcs->push_back(std::make_shared<AsyncAlterTable>(
-          master_, AsyncTaskPool(), tablet, tables.at(id_to_version.first), TransactionId::Nil()));
+      // All metadata related changes for the tablet is passed as part of RESTORE_ON_TABLET rpcs
+      // and we should not trigger anything else during restore so as to not race schema versions.
+      // TODO(Sanket): What if restore is stuck then this block is muted forever.
+      auto restore_result = IsTableUndergoingPitrRestore(*(*tables)[id_to_version.first]);
+      LOG_IF(DFATAL, !restore_result.ok())
+          << "Failed to determine if table has PITR restore in progress";
+      if (!restore_result.ok() || !*restore_result) {
+        LOG(INFO) << "Triggering AlterTable for table id " << id_to_version.first
+                  << " due to heartbeat delay for tablet ID " << tablet->tablet_id();
+        rpcs->push_back(std::make_shared<AsyncAlterTable>(
+            master_, AsyncTaskPool(), tablet, (*tables)[id_to_version.first],
+            TransactionId::Nil()));
+      }
     }
   }
 
@@ -7049,8 +7171,8 @@ Status CatalogManager::ProcessTabletReportBatch(
     // replica so that the balancer knows how many tablets are in the middle of remote bootstrap.
     if (report.has_committed_consensus_state()) {
       if (ProcessCommittedConsensusState(
-          ts_desc, is_incremental, report, table_write_locks, tablet, tablet_lock,
-          it->tables, rpcs)) {
+          ts_desc, is_incremental, report, &table_write_locks, tablet, tablet_lock,
+          &it->tables, rpcs)) {
         // 6. If the tablet was mutated, add it to the tablets to be re-persisted.
         //
         // Done here and not on a per-mutation basis to avoid duplicate entries.
@@ -9028,12 +9150,16 @@ void CatalogManager::CreateNewReplicaForLocalMemory(TSDescriptor* ts_desc,
   new_replica->state = report.state();
   new_replica->ts_desc = ts_desc;
   if (!ts_desc->registered_through_heartbeat()) {
-    new_replica->time_updated = MonoTime::Now() - ts_desc->TimeSinceHeartbeat();
+    auto last_heartbeat = ts_desc->LastHeartbeatTime();
+    new_replica->time_updated = last_heartbeat ? last_heartbeat : MonoTime::kMin;
   }
 }
 
-Status CatalogManager::GetTabletPeer(const TabletId& tablet_id,
-                                     std::shared_ptr<TabletPeer>* ret_tablet_peer) const {
+Result<tablet::TabletPeerPtr> CatalogManager::GetServingTablet(const TabletId& tablet_id) const {
+  return GetServingTablet(Slice(tablet_id));
+}
+
+Result<tablet::TabletPeerPtr> CatalogManager::GetServingTablet(const Slice& tablet_id) const {
   // Note: CatalogManager has only one table, 'sys_catalog', with only
   // one tablet.
 
@@ -9049,18 +9175,17 @@ Status CatalogManager::GetTabletPeer(const TabletId& tablet_id,
   CHECK(sys_catalog_) << "sys_catalog_ must be initialized!";
 
   if (master_->opts().IsShellMode()) {
-    return STATUS_SUBSTITUTE(NotFound,
-        "In shell mode: no tablet_id $0 exists in CatalogManager.", tablet_id);
+    return STATUS_FORMAT(NotFound,
+        "In shell mode: no tablet_id $0 exists in CatalogManager", tablet_id);
   }
 
   if (sys_catalog_->tablet_id() == tablet_id && sys_catalog_->tablet_peer().get() != nullptr &&
       sys_catalog_->tablet_peer()->CheckRunning().ok()) {
-    *ret_tablet_peer = tablet_peer();
-  } else {
-    return STATUS_SUBSTITUTE(NotFound,
-        "no SysTable in the RUNNING state exists with tablet_id $0 in CatalogManager", tablet_id);
+    return tablet_peer();
   }
-  return Status::OK();
+
+  return STATUS_FORMAT(NotFound,
+      "no SysTable in the RUNNING state exists with tablet_id $0 in CatalogManager", tablet_id);
 }
 
 const NodeInstancePB& CatalogManager::NodeInstance() const {
@@ -9075,14 +9200,14 @@ Status CatalogManager::UpdateMastersListInMemoryAndDisk() {
   DCHECK(master_->opts().IsShellMode());
 
   if (!master_->opts().IsShellMode()) {
-    return STATUS(IllegalState, "Cannot update master's info when process is not in shell mode.");
+    return STATUS(IllegalState, "Cannot update master's info when process is not in shell mode");
   }
 
   consensus::ConsensusStatePB consensus_state;
   RETURN_NOT_OK(GetCurrentConfig(&consensus_state));
 
   if (!consensus_state.has_config()) {
-    return STATUS(NotFound, "No Raft config found.");
+    return STATUS(NotFound, "No Raft config found");
   }
 
   RETURN_NOT_OK(sys_catalog_->ConvertConfigToMasterAddresses(consensus_state.config()));
@@ -9129,11 +9254,24 @@ Status CatalogManager::StartRemoteBootstrap(const StartRemoteBootstrapRequestPB&
 
   LOG(INFO) << "Starting remote bootstrap: " << req.ShortDebugString();
 
+  ServerRegistrationPB tablet_leader_peer_conn_info;
+  if (!req.is_served_by_tablet_leader()) {
+    *tablet_leader_peer_conn_info.mutable_broadcast_addresses() =
+        req.tablet_leader_broadcast_addr();
+    *tablet_leader_peer_conn_info.mutable_private_rpc_addresses() =
+        req.tablet_leader_private_addr();
+    *tablet_leader_peer_conn_info.mutable_cloud_info() = req.tablet_leader_cloud_info();
+  }
+
   HostPort bootstrap_peer_addr = HostPortFromPB(DesiredHostPort(
-      req.source_broadcast_addr(), req.source_private_addr(), req.source_cloud_info(),
+      req.bootstrap_source_broadcast_addr(),
+      req.bootstrap_source_private_addr(),
+      req.bootstrap_source_cloud_info(),
       master_->MakeCloudInfoPB()));
 
-  const string& bootstrap_peer_uuid = req.bootstrap_peer_uuid();
+  RETURN_NOT_OK(master_->InitAutoFlagsFromMasterLeader(bootstrap_peer_addr));
+
+  const string& bootstrap_peer_uuid = req.bootstrap_source_peer_uuid();
   int64_t leader_term = req.caller_term();
 
   std::shared_ptr<TabletPeer> old_tablet_peer;
@@ -9169,7 +9307,11 @@ Status CatalogManager::StartRemoteBootstrap(const StartRemoteBootstrapRequestPB&
     RETURN_NOT_OK(rb_client->SetTabletToReplace(meta, leader_term));
   }
   RETURN_NOT_OK(rb_client->Start(
-      bootstrap_peer_uuid, &master_->proxy_cache(), bootstrap_peer_addr, &meta));
+      bootstrap_peer_uuid,
+      &master_->proxy_cache(),
+      bootstrap_peer_addr,
+      tablet_leader_peer_conn_info,
+      &meta));
   // This SetupTabletPeer is needed by rb_client to perform the remote bootstrap/fetch.
   // And the SetupTablet below to perform "local bootstrap" cannot be done until the remote fetch
   // has succeeded. So keeping them seperate for now.
@@ -9248,19 +9390,8 @@ Status CatalogManager::SendAlterTableRequest(const scoped_refptr<TableInfo>& tab
       req->has_transaction() &&
       req->transaction().has_transaction_id();
 
-  bool alter_table_has_add_or_drop_column_step = false;
-  if (req && (req->alter_schema_steps_size() || req->has_alter_properties())) {
-    for (const AlterTableRequestPB::Step& step : req->alter_schema_steps()) {
-      if (step.type() == AlterTableRequestPB::ADD_COLUMN ||
-          step.type() == AlterTableRequestPB::DROP_COLUMN) {
-        alter_table_has_add_or_drop_column_step = true;
-        break;
-      }
-    }
-  }
-
   TransactionId txn_id = TransactionId::Nil();
-  if (is_ysql_table_with_transaction_metadata && alter_table_has_add_or_drop_column_step) {
+  if (is_ysql_table_with_transaction_metadata) {
     {
       LOG(INFO) << "Persist transaction metadata into SysTableEntryPB for table ID " << table->id();
       TRACE("Locking table");
@@ -9742,6 +9873,20 @@ Status CatalogManager::HandleTabletSchemaVersionReport(
                                    << current_version << ")";
       return Status::OK();
     }
+
+    // If it's undergoing a PITR restore, no need to launch next version.
+    if (VERIFY_RESULT(IsTableUndergoingPitrRestore(*table))) {
+      LOG(INFO) << "Table " << table->ToString() << " is undergoing a PITR restore currently";
+      return Status::OK();
+    }
+  }
+
+  // With Replication Enabled, verify that we've finished applying the New Schema.
+  // This may need to be refactored when we support Replication + Active Index Backfill in #7613.
+  if ([&]() {SharedLock lock(mutex_); return IsTableCdcConsumer(*table);}()) {
+    // If we're waiting for a Schema because we saw the a replication source with a change,
+    // resume replication now that the alter is complete.
+    RETURN_NOT_OK(ResumeCdcAfterNewSchema(*table));
   }
 
   return MultiStageAlterTable::LaunchNextTableInfoVersionIfNecessary(this, table, version);
@@ -10592,6 +10737,9 @@ Status CatalogManager::PeerStateDump(const vector<RaftPeerPB>& peers,
 }
 
 void CatalogManager::ReportMetrics() {
+  // Report metrics on load balancer state.
+  load_balance_policy_->ReportMetrics();
+
   // Report metrics on how many tservers are alive.
   TSDescriptorVector ts_descs;
   master_->ts_manager()->GetAllLiveDescriptors(&ts_descs);
@@ -10788,6 +10936,15 @@ Result<size_t> CatalogManager::GetReplicationFactor() {
   auto l = cluster_config->LockForRead();
   const ReplicationInfoPB& replication_info = l->pb.replication_info();
   return GetNumReplicasFromPlacementInfo(replication_info.live_replicas());
+}
+
+
+Result<size_t> CatalogManager::GetTableReplicationFactor(const TableInfoPtr& table) const {
+  auto replication_info = VERIFY_RESULT(GetTableReplicationInfo(table));
+  if (replication_info.has_live_replicas()) {
+    return GetNumReplicasFromPlacementInfo(replication_info.live_replicas());
+  }
+  return FLAGS_replication_factor;
 }
 
 Result<size_t> CatalogManager::GetReplicationFactorForTablet(
@@ -10992,6 +11149,16 @@ Status CatalogManager::GetLoadMoveCompletionPercent(GetLoadMovePercentResponsePB
   resp->set_total(initial_load);
 
   return Status::OK();
+}
+
+void CatalogManager::ResetTasksTrackers() {
+  VLOG_WITH_FUNC(1) << "Begin";
+
+  // Reset the jobs/tasks tracker.
+  tasks_tracker_->Reset();
+  jobs_tracker_->Reset();
+
+  VLOG_WITH_FUNC(1) << "End";
 }
 
 void CatalogManager::AbortAndWaitForAllTasks(const vector<scoped_refptr<TableInfo>>& tables) {
@@ -11378,8 +11545,7 @@ Result<bool> CatalogManager::SysCatalogLeaderStepDown(const ServerEntryPB& maste
       LOG_WITH_PREFIX(FATAL) << "For test: Crashing the server instead of performing sys "
                                 "catalog leader affinity move.";
     }
-  std::shared_ptr<TabletPeer> tablet_peer;
-  RETURN_NOT_OK(GetTabletPeer(sys_catalog_->tablet_id(), &tablet_peer));
+  auto tablet_peer = VERIFY_RESULT(GetServingTablet(sys_catalog_->tablet_id()));
 
   consensus::LeaderStepDownRequestPB req;
   req.set_tablet_id(sys_catalog_->tablet_id());

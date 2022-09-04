@@ -39,6 +39,7 @@
 
 #include <glog/logging.h>
 
+#include "yb/client/auto_flags_manager.h"
 #include "yb/client/async_initializer.h"
 #include "yb/client/client.h"
 
@@ -48,6 +49,7 @@
 
 #include "yb/gutil/bind.h"
 
+#include "yb/master/auto_flags_orchestrator.h"
 #include "yb/master/master_fwd.h"
 #include "yb/master/catalog_manager.h"
 #include "yb/master/flush_manager.h"
@@ -56,6 +58,7 @@
 #include "yb/master/master_service.h"
 #include "yb/master/master_tablet_service.h"
 #include "yb/master/master_util.h"
+#include "yb/master/sys_catalog_constants.h"
 
 #include "yb/rpc/messenger.h"
 #include "yb/rpc/service_if.h"
@@ -90,7 +93,6 @@ METRIC_DEFINE_entity(cluster);
 
 using namespace std::literals;
 using std::min;
-using std::shared_ptr;
 using std::vector;
 
 using yb::consensus::RaftPeerPB;
@@ -140,18 +142,19 @@ namespace yb {
 namespace master {
 
 Master::Master(const MasterOptions& opts)
-  : DbServerBase("Master", opts, "yb.master", server::CreateMemTrackerForServer()),
-    state_(kStopped),
-    ts_manager_(new TSManager()),
-    catalog_manager_(new enterprise::CatalogManager(this)),
-    path_handlers_(new MasterPathHandlers(this)),
-    flush_manager_(new FlushManager(this, catalog_manager())),
-    init_future_(init_status_.get_future()),
-    opts_(opts),
-    maintenance_manager_(new MaintenanceManager(MaintenanceManager::DEFAULT_OPTIONS)),
-    metric_entity_cluster_(METRIC_ENTITY_cluster.Instantiate(metric_registry_.get(),
-                                                             "yb.cluster")),
-    master_tablet_server_(new MasterTabletServer(this, metric_entity())) {
+    : DbServerBase("Master", opts, "yb.master", server::CreateMemTrackerForServer()),
+      state_(kStopped),
+      auto_flags_manager_(new AutoFlagsManager("yb-master", fs_manager_.get())),
+      ts_manager_(new TSManager()),
+      catalog_manager_(new enterprise::CatalogManager(this)),
+      path_handlers_(new MasterPathHandlers(this)),
+      flush_manager_(new FlushManager(this, catalog_manager())),
+      init_future_(init_status_.get_future()),
+      opts_(opts),
+      maintenance_manager_(new MaintenanceManager(MaintenanceManager::DEFAULT_OPTIONS)),
+      metric_entity_cluster_(
+          METRIC_ENTITY_cluster.Instantiate(metric_registry_.get(), "yb.cluster")),
+      master_tablet_server_(new MasterTabletServer(this, metric_entity())) {
   SetConnectionContextFactory(rpc::CreateConnectionContextFactory<rpc::YBInboundConnectionContext>(
       GetAtomicFlag(&FLAGS_inbound_rpc_memory_limit),
       mem_tracker()));
@@ -208,6 +211,32 @@ Status Master::Init() {
   return Status::OK();
 }
 
+Status Master::InitAutoFlags() {
+  if (!VERIFY_RESULT(auto_flags_manager_->LoadFromFile())) {
+    if (fs_manager_->LookupTablet(kSysCatalogTabletId)) {
+      // Pre-existing cluster
+      RETURN_NOT_OK(CreateEmptyAutoFlagsConfig(auto_flags_manager_.get()));
+    } else if (!opts().AreMasterAddressesProvided()) {
+      // New master in Shell mode
+      LOG(INFO) << "AutoFlags initialization delayed as master is in Shell mode.";
+    } else {
+      // New cluster
+      RETURN_NOT_OK(CreateAutoFlagsConfigForNewCluster(auto_flags_manager_.get()));
+    }
+  }
+
+  return Status::OK();
+}
+
+Status Master::InitAutoFlagsFromMasterLeader(const HostPort& leader_address) {
+  SCHECK(
+      opts().IsShellMode(), IllegalState,
+      "Cannot load AutoFlags from another master when not in shell mode.");
+
+  return auto_flags_manager_->LoadFromMaster(
+      options_.HostsString(), {{leader_address}}, ApplyNonRuntimeAutoFlags::kTrue);
+}
+
 MonoDelta Master::default_client_timeout() {
   return std::chrono::milliseconds(FLAGS_master_yb_client_default_timeout_ms);
 }
@@ -254,9 +283,9 @@ Status Master::RegisterServices() {
                                                      std::move(consensus_service),
                                                      rpc::ServicePriority::kHigh));
 
-  std::unique_ptr<ServiceIf> remote_bootstrap_service(
-      new tserver::RemoteBootstrapServiceImpl(
-          fs_manager_.get(), catalog_manager_.get(), metric_entity()));
+  std::unique_ptr<ServiceIf> remote_bootstrap_service(new tserver::RemoteBootstrapServiceImpl(
+      fs_manager_.get(), catalog_manager_.get(), metric_entity(), opts_.MakeCloudInfoPB(),
+      &this->proxy_cache()));
   RETURN_NOT_OK(RpcAndWebServerBase::RegisterService(FLAGS_master_remote_bootstrap_svc_queue_length,
                                                      std::move(remote_bootstrap_service)));
 
@@ -549,6 +578,12 @@ PermissionsManager& Master::permissions_manager() {
 EncryptionManager& Master::encryption_manager() {
   return catalog_manager_->encryption_manager();
 }
+
+uint32_t Master::GetAutoFlagConfigVersion() const {
+  return auto_flags_manager_->GetConfigVersion();
+}
+
+AutoFlagsConfigPB Master::GetAutoFlagConfig() const { return auto_flags_manager_->GetConfig(); }
 
 } // namespace master
 } // namespace yb

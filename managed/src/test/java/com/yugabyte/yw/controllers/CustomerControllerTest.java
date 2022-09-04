@@ -121,7 +121,25 @@ public class CustomerControllerTest extends FakeDBApplication {
     Result result = route(fakeRequest("GET", rootRoute).cookie(validCookie));
     assertEquals(OK, result.status());
     ArrayNode json = (ArrayNode) Json.parse(contentAsString(result));
-    assertEquals(json.get(0).get("uuid").textValue(), customer.uuid.toString());
+    JsonNode node = json.get(0);
+    assertEquals(node.get("uuid").textValue(), customer.uuid.toString());
+    assertNull(node.get("universeUuids"));
+  }
+
+  @Test
+  public void testListCustomersWithUniverseUuids() {
+    Universe universe = createUniverse(customer.getCustomerId());
+    String authToken = user.createAuthToken();
+    Http.Cookie validCookie = Http.Cookie.builder("authToken", authToken).build();
+    Result result =
+        route(fakeRequest("GET", rootRoute + "?includeUniverseUuids=true").cookie(validCookie));
+    assertEquals(OK, result.status());
+    ArrayNode json = (ArrayNode) Json.parse(contentAsString(result));
+    JsonNode node = json.get(0);
+    assertEquals(node.get("uuid").textValue(), customer.uuid.toString());
+    ArrayNode universeUuids = (ArrayNode) node.get("universeUuids");
+    assertEquals(1, universeUuids.size());
+    assertEquals(universe.universeUUID, Json.fromJson(universeUuids.get(0), UUID.class));
   }
 
   // check that invalid creds is failing to do that
@@ -156,13 +174,19 @@ public class CustomerControllerTest extends FakeDBApplication {
   public void testCustomerGETWithBadUUID() {
     String authToken = user.createAuthToken();
     Http.Cookie validCookie = Http.Cookie.builder("authToken", authToken).build();
-    Result result = route(fakeRequest("GET", baseRoute + "null").cookie(validCookie));
+    final String method = "GET";
+    final String uri = baseRoute + "null";
+    Result result = route(fakeRequest(method, uri).cookie(validCookie));
     assertEquals(BAD_REQUEST, result.status());
 
     JsonNode ybpError = Json.parse(contentAsString(result));
     assertEquals(
         Json.toJson(
-            new YBPError("Cannot parse parameter cUUID as UUID: Invalid UUID string: null")),
+            new YBPError(
+                method,
+                uri,
+                "Cannot parse parameter cUUID as UUID: Invalid UUID string: null",
+                null)),
         ybpError);
     assertAuditEntry(0, customer.uuid);
   }
@@ -891,19 +915,20 @@ public class CustomerControllerTest extends FakeDBApplication {
     params.set("metrics", Json.toJson(ImmutableList.of("metric")));
     params.put("start", "1479281737");
 
-    ObjectNode expectedResponse = Json.newObject();
-    expectedResponse.put("success", false);
-    expectedResponse.put("error", "Weird Data provided");
+    final String userVisibleMessage = "Weird Data provided";
+
+    final String method = "POST";
+    final String uri = baseRoute + customer.uuid + "/metrics";
+    YBPError expectedYBPError = new YBPError(method, uri, userVisibleMessage, null);
 
     when(mockMetricQueryHelper.query(anyList(), anyMap(), anyMap(), anyBoolean()))
-        .thenThrow(new PlatformServiceException(BAD_REQUEST, "Weird Data provided"));
+        .thenThrow(new PlatformServiceException(BAD_REQUEST, userVisibleMessage));
     Result result =
-        routeWithYWErrHandler(
-            fakeRequest("POST", baseRoute + customer.uuid + "/metrics")
-                .cookie(validCookie)
-                .bodyJson(params));
+        routeWithYWErrHandler(fakeRequest(method, uri).cookie(validCookie).bodyJson(params));
     assertEquals(BAD_REQUEST, result.status());
-    assertThat(Json.parse(contentAsString(result)), allOf(notNullValue(), is(expectedResponse)));
+    assertThat(
+        Json.parse(contentAsString(result)),
+        allOf(notNullValue(), is(Json.toJson(expectedYBPError))));
     assertAuditEntry(0, customer.uuid);
   }
 

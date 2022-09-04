@@ -41,7 +41,6 @@ class AbstractCloud(AbstractCommandParser):
     YSQLSH_CERT_DIR = os.path.join(YB_HOME_DIR, ".yugabytedb")
     ROOT_CERT_NAME = "ca.crt"
     ROOT_CERT_NEW_NAME = "ca_new.crt"
-    PRODUCER_CERTS_DIR_NAME = "yugabyte-tls-producer"
     CLIENT_ROOT_NAME = "root.crt"
     CLIENT_CERT_NAME = "yugabytedb.crt"
     CLIENT_KEY_NAME = "yugabytedb.key"
@@ -49,7 +48,7 @@ class AbstractCloud(AbstractCommandParser):
     CERT_LOCATION_PLATFORM = "platform"
     SSH_RETRY_COUNT = 180
     SSH_WAIT_SECONDS = 5
-    SSH_TIMEOUT_SECONDS = 10
+    SSH_TIMEOUT_SECONDS = 4
     MOUNT_PATH_PREFIX = "/mnt/d"
 
     def __init__(self, name):
@@ -501,8 +500,6 @@ class AbstractCloud(AbstractCommandParser):
             root_cert_path,
             replication_config_name,
             producer_certs_dir):
-        if producer_certs_dir is None:
-            producer_certs_dir = self.PRODUCER_CERTS_DIR_NAME
         remote_shell = RemoteShell(ssh_options)
         node_ip = ssh_options["ssh_host"]
         src_root_cert_dir_path = os.path.join(producer_certs_dir, replication_config_name)
@@ -530,8 +527,6 @@ class AbstractCloud(AbstractCommandParser):
                     "return code '{}' and error '{}'".format(rm_result.stderr.encode('utf-8'),
                                                              rm_result.exited))
 
-        if producer_certs_dir is None:
-            producer_certs_dir = self.PRODUCER_CERTS_DIR_NAME
         remote_shell = RemoteShell(ssh_options)
         node_ip = ssh_options["ssh_host"]
         src_root_cert_dir_path = os.path.join(producer_certs_dir, replication_config_name)
@@ -685,9 +680,8 @@ class AbstractCloud(AbstractCommandParser):
         sock = None
         retry_count = 0
 
-        while retry_count < self.SSH_RETRY_COUNT:
+        while True:
             logging.info("[app] Waiting for ssh: {}:{}".format(private_ip, str(ssh_ports)))
-            time.sleep(self.SSH_WAIT_SECONDS)
             # Try connecting with the given ssh ports in succession.
             for ssh_port in ssh_ports:
                 ssh_port = int(ssh_port)
@@ -705,12 +699,14 @@ class AbstractCloud(AbstractCommandParser):
                         sock.close()
             # Increment retry only after attempts on all ports fail.
             retry_count += 1
-        else:
-            logging.error("[app] Start instance {} exceeded maxRetries!".format(instance_name))
-            raise YBOpsRuntimeError(
-                "Cannot reach the instance {} after its start at ports {}".format(
-                    instance_name, str(ssh_ports))
-            )
+            if retry_count < self.SSH_RETRY_COUNT:
+                time.sleep(self.SSH_WAIT_SECONDS)
+            else:
+                logging.error("[app] Start instance {} exceeded maxRetries!".format(instance_name))
+                raise YBOpsRuntimeError(
+                    "Cannot reach the instance {} after its start at ports {}".format(
+                        instance_name, str(ssh_ports))
+                )
 
     def wait_for_startup_script(self, args, host_info):
         if self._wait_for_startup_script_command:

@@ -709,7 +709,7 @@ void PgLibPqTest::TestMultiBankAccount(IsolationLevel isolation) {
   for (auto* tserver : cluster_->tserver_daemons()) {
     auto tablets = ASSERT_RESULT(cluster_->GetTabletIds(tserver));
     for (const auto& tablet : tablets) {
-      auto result = tserver->GetInt64Metric(
+      auto result = tserver->GetMetric<int64>(
           &METRIC_ENTITY_tablet, tablet.c_str(), &METRIC_transaction_not_found, "value");
       if (result.ok()) {
         total_not_found += *result;
@@ -1634,7 +1634,7 @@ TEST_F_EX(PgLibPqTest, YB_DISABLE_TEST_IN_TSAN(NumberOfInitialRpcs), PgLibPqTest
   auto get_master_inbound_rpcs_created = [this]() -> Result<int64_t> {
     int64_t m_in_created = 0;
     for (const auto* master : this->cluster_->master_daemons()) {
-      m_in_created += VERIFY_RESULT(master->GetInt64Metric(
+      m_in_created += VERIFY_RESULT(master->GetMetric<int64>(
           &METRIC_ENTITY_server, "yb.master", &METRIC_rpc_inbound_calls_created, "value"));
     }
     return m_in_created;
@@ -2757,8 +2757,12 @@ TEST_F(PgLibPqTest, YB_DISABLE_TEST_IN_TSAN(NonBreakingDDLMode)) {
   ASSERT_OK(conn1.Execute("BEGIN"));
   res = ASSERT_RESULT(conn1.Fetch("SELECT * FROM t1"));
   ASSERT_EQ(0, PQntuples(res.get()));
+
+  // Do grant first otherwise the next two REVOKE statements will be no-ops.
+  ASSERT_OK(conn2.Execute("GRANT ALL ON t2 TO public"));
+
   ASSERT_OK(conn2.Execute("SET yb_make_next_ddl_statement_nonbreaking TO TRUE"));
-  ASSERT_OK(conn2.Execute("REVOKE ALL ON t2 FROM public"));
+  ASSERT_OK(conn2.Execute("REVOKE SELECT ON t2 FROM public"));
   // Wait for the new catalog version to propagate to TServers.
   std::this_thread::sleep_for(2s);
   res = ASSERT_RESULT(conn1.Fetch("SELECT * FROM t1"));
@@ -2766,7 +2770,7 @@ TEST_F(PgLibPqTest, YB_DISABLE_TEST_IN_TSAN(NonBreakingDDLMode)) {
 
   // Verify that the session variable yb_make_next_ddl_statement_nonbreaking auto-resets to false.
   // As a result, the running transaction on conn1 is aborted.
-  ASSERT_OK(conn2.Execute("REVOKE ALL ON t2 FROM public"));
+  ASSERT_OK(conn2.Execute("REVOKE INSERT ON t2 FROM public"));
   // Wait for the new catalog version to propagate to TServers.
   std::this_thread::sleep_for(2s);
   result = conn1.Fetch("SELECT * FROM t1");
@@ -2774,6 +2778,58 @@ TEST_F(PgLibPqTest, YB_DISABLE_TEST_IN_TSAN(NonBreakingDDLMode)) {
   status = ResultToStatus(result);
   ASSERT_TRUE(status.ToString().find(msg) != std::string::npos);
   ASSERT_OK(conn1.Execute("ABORT"));
+}
+
+TEST_F(PgLibPqTest, YB_DISABLE_TEST_IN_TSAN(AggrSystemColumn)) {
+  const string kDatabaseName = "yugabyte";
+  auto conn = ASSERT_RESULT(ConnectToDB(kDatabaseName));
+
+  // Count oid column which is a system column.
+  auto res = ASSERT_RESULT(conn.Fetch("SELECT COUNT(oid) FROM pg_type"));
+  auto lines = PQntuples(res.get());
+  ASSERT_EQ(lines, 1);
+  auto columns = PQnfields(res.get());
+  ASSERT_EQ(columns, 1);
+  int64 count_oid = static_cast<uint32>(CHECK_RESULT(GetInt64(res.get(), 0, 0)));
+  // Should get a positive count.
+  ASSERT_GT(count_oid, 0);
+
+  // Count oid column which is a system column, but cast oid to int.
+  res = ASSERT_RESULT(conn.Fetch("SELECT COUNT(oid::int) FROM pg_type"));
+  lines = PQntuples(res.get());
+  ASSERT_EQ(lines, 1);
+  columns = PQnfields(res.get());
+  ASSERT_EQ(columns, 1);
+  int64 count_oid_int = static_cast<uint32>(CHECK_RESULT(GetInt64(res.get(), 0, 0)));
+  // Should get the same count.
+  ASSERT_EQ(count_oid_int, count_oid);
+
+  // Count typname column which is a regular column.
+  res = ASSERT_RESULT(conn.Fetch("SELECT COUNT(typname) FROM pg_type"));
+  lines = PQntuples(res.get());
+  ASSERT_EQ(lines, 1);
+  columns = PQnfields(res.get());
+  ASSERT_EQ(columns, 1);
+  int64 count_typname = static_cast<uint32>(CHECK_RESULT(GetInt64(res.get(), 0, 0)));
+  // Should get the same count.
+  ASSERT_EQ(count_oid, count_typname);
+
+  // Test unsupported system columns which would otherwise get the same count as shown
+  // in vanilla Postgres.
+  auto result = conn.Fetch("SELECT COUNT(ctid) FROM pg_type");
+  ASSERT_NOK(result);
+  result = conn.Fetch("SELECT COUNT(cmin) FROM pg_type");
+  ASSERT_NOK(result);
+  result = conn.Fetch("SELECT COUNT(cmax) FROM pg_type");
+  ASSERT_NOK(result);
+  result = conn.Fetch("SELECT COUNT(xmin) FROM pg_type");
+  ASSERT_NOK(result);
+  result = conn.Fetch("SELECT COUNT(xmax) FROM pg_type");
+  ASSERT_NOK(result);
+
+  // Test SUM(oid) results in error.
+  result = conn.Fetch("SELECT SUM(oid) FROM pg_type");
+  ASSERT_NOK(result);
 }
 
 } // namespace pgwrapper

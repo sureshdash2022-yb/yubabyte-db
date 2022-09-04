@@ -135,6 +135,13 @@ DEFINE_bool(load_balancer_ignore_cloud_info_similarity, false,
             "If true, ignore the similarity between cloud infos when deciding which tablet "
             "to move.");
 
+METRIC_DEFINE_gauge_int64(cluster,
+                          is_load_balancing_enabled,
+                          "Is Load Balancing Enabled",
+                          yb::MetricUnit::kUnits,
+                          "Is load balancing enabled in the cluster where "
+                          "1 indicates it is enabled.");
+
 namespace yb {
 namespace master {
 
@@ -199,26 +206,8 @@ std::vector<std::pair<TabletId, std::string>> GetLeadersOnTSToMove(
 } // namespace
 
 Result<ReplicationInfoPB> ClusterLoadBalancer::GetTableReplicationInfo(
-    const scoped_refptr<TableInfo>& table) const {
-
-  // Return custom placement policy if it exists.
-  {
-    auto l = table->LockForRead();
-    if (l->pb.has_replication_info()) {
-      return l->pb.replication_info();
-    }
-  }
-
-  // Custom placement policy does not exist. Check whether this table
-  // has a tablespace associated with it, if so, return the placement info
-  // for that tablespace.
-  auto replication_info = VERIFY_RESULT(tablespace_manager_->GetTableReplicationInfo(table));
-  if (replication_info) {
-    return replication_info.value();
-  }
-
-  // No custom policy or tablespace specified for table.
-  return GetClusterReplicationInfo();
+    const scoped_refptr<const TableInfo>& table) const {
+  return catalog_manager_->GetTableReplicationInfo(table);
 }
 
 void ClusterLoadBalancer::InitTablespaceManager() {
@@ -324,6 +313,11 @@ void set_remaining(T pending_tasks, T* remaining_tasks) {
 
 // Needed as we have a unique_ptr to the forward declared PerTableLoadState class.
 ClusterLoadBalancer::~ClusterLoadBalancer() = default;
+
+void ClusterLoadBalancer::InitMetrics() {
+  is_load_balancing_enabled_metric_ = METRIC_is_load_balancing_enabled.Instantiate(
+      catalog_manager_->master_->metric_entity_cluster(), 0);
+}
 
 void ClusterLoadBalancer::RunLoadBalancerWithOptions(Options* options) {
   ResetGlobalState();
@@ -671,6 +665,10 @@ Status ClusterLoadBalancer::IsIdle() const {
 
 bool ClusterLoadBalancer::CanBalanceGlobalLoad() const {
   return FLAGS_enable_global_load_balancing && can_perform_global_operations_;
+}
+
+void ClusterLoadBalancer::ReportMetrics() {
+  is_load_balancing_enabled_metric_->set_value(IsLoadBalancerEnabled());
 }
 
 void ClusterLoadBalancer::ReportUnusualLoadBalancerState() const {

@@ -3,7 +3,6 @@ package com.yugabyte.yw.common;
 import static com.yugabyte.yw.models.helpers.CustomerConfigConsts.BACKUP_LOCATION_FIELDNAME;
 
 import com.google.inject.Singleton;
-import com.google.inject.Inject;
 import com.yugabyte.yw.common.kms.util.EncryptionAtRestUtil;
 import com.yugabyte.yw.forms.RestoreBackupParams;
 import com.yugabyte.yw.forms.RestoreBackupParams.ActionType;
@@ -60,10 +59,12 @@ public class RestoreManagerYb extends DevopsBase {
 
     boolean nodeToNodeTlsEnabled = userIntent.enableNodeToNodeEncrypt;
     if (region.provider.code.equals("kubernetes")) {
-      PlacementInfo pi = primaryCluster.placementInfo;
-      podFQDNToConfig =
-          PlacementInfoUtil.getKubernetesConfigPerPod(
-              pi, universe.getUniverseDetails().getNodesInCluster(primaryCluster.uuid));
+      for (Cluster cluster : universe.getUniverseDetails().clusters) {
+        PlacementInfo pi = cluster.placementInfo;
+        podFQDNToConfig.putAll(
+            PlacementInfoUtil.getKubernetesConfigPerPod(
+                pi, universe.getUniverseDetails().getNodesInCluster(cluster.uuid)));
+      }
     } else {
       // Populate the map so that we use the correct SSH Keys for the different
       // nodes in different clusters.
@@ -75,8 +76,11 @@ public class RestoreManagerYb extends DevopsBase {
             AccessKey.getOrBadRequest(clusterProvider.uuid, clusterUserIntent.accessKeyCode);
         Collection<NodeDetails> nodesInCluster = universe.getNodesInCluster(cluster.uuid);
         for (NodeDetails nodeInCluster : nodesInCluster) {
-          ipToSshKeyPath.put(
-              nodeInCluster.cloudInfo.private_ip, accessKeyForCluster.getKeyInfo().privateKey);
+          if (nodeInCluster.cloudInfo.private_ip != null
+              && !nodeInCluster.cloudInfo.private_ip.equals("null")) {
+            ipToSshKeyPath.put(
+                nodeInCluster.cloudInfo.private_ip, accessKeyForCluster.getKeyInfo().privateKey);
+          }
         }
       }
     }

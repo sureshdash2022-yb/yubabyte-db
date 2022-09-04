@@ -107,19 +107,14 @@ using std::shared_ptr;
 using std::unique_ptr;
 
 using yb::consensus::CONSENSUS_CONFIG_ACTIVE;
-using yb::consensus::CONSENSUS_CONFIG_COMMITTED;
 using yb::consensus::ConsensusMetadata;
 using yb::consensus::RaftConfigPB;
 using yb::consensus::RaftPeerPB;
 using yb::log::Log;
-using yb::log::LogAnchorRegistry;
-using yb::tserver::WriteRequestPB;
 using yb::tserver::WriteResponsePB;
 using strings::Substitute;
 using yb::consensus::StateChangeContext;
 using yb::consensus::StateChangeReason;
-using yb::consensus::ChangeConfigRequestPB;
-using yb::consensus::ChangeConfigRecordPB;
 
 DEFINE_bool(notify_peer_of_removal_from_cluster, true,
             "Notify a peer after it has been removed from the cluster.");
@@ -169,6 +164,8 @@ SysCatalogTable::SysCatalogTable(Master* master, MetricRegistry* metrics,
   CHECK_OK(ThreadPoolBuilder("raft").Build(&raft_pool_));
   CHECK_OK(ThreadPoolBuilder("prepare").set_min_threads(1).Build(&tablet_prepare_pool_));
   CHECK_OK(ThreadPoolBuilder("append").set_min_threads(1).Build(&append_pool_));
+  CHECK_OK(ThreadPoolBuilder("log-sync")
+              .set_min_threads(1).Build(&log_sync_pool_));
   CHECK_OK(ThreadPoolBuilder("log-alloc").set_min_threads(1).Build(&allocation_pool_));
 
   setup_config_dns_histogram_ = METRIC_dns_resolve_latency_during_sys_catalog_setup.Instantiate(
@@ -448,31 +445,6 @@ void SysCatalogTable::SysCatalogStateChanged(
     LOG(INFO) << "Processing context '" << context->ToString()
               << "' - new count " << new_count << ", old count " << old_count;
 
-    // If new_config and old_config have the same number of peers, then the change config must have
-    // been a ROLE_CHANGE, thus old_config must have exactly one peer in transition (PRE_VOTER or
-    // PRE_OBSERVER) and new_config should have none.
-    if (new_count == old_count) {
-      auto old_config_peers_transition_count =
-          CountServersInTransition(context->change_record.old_config());
-      if (old_config_peers_transition_count != 1) {
-        LOG(FATAL) << "Expected old config to have one server in transition (PRE_VOTER or "
-                   << "PRE_OBSERVER), but found " << old_config_peers_transition_count
-                   << ". Config: " << context->change_record.old_config().ShortDebugString();
-      }
-      auto new_config_peers_transition_count =
-          CountServersInTransition(context->change_record.new_config());
-      if (new_config_peers_transition_count != 0) {
-        LOG(FATAL) << "Expected new config to have no servers in transition (PRE_VOTER or "
-                   << "PRE_OBSERVER), but found " << new_config_peers_transition_count
-                   << ". Config: " << context->change_record.old_config().ShortDebugString();
-      }
-    } else if (std::abs(new_count - old_count) != 1) {
-
-      LOG(FATAL) << "Expected exactly one server addition or deletion, found " << new_count
-                 << " servers in new config and " << old_count << " servers in old config.";
-      return;
-    }
-
     Status s = master_->ResetMemoryState(context->change_record.new_config());
     if (!s.ok()) {
       LOG(WARNING) << "Change Memory state failed " << s.ToString();
@@ -608,6 +580,7 @@ Status SysCatalogTable::OpenTablet(const scoped_refptr<tablet::RaftGroupMetadata
       .listener = tablet_peer()->status_listener(),
       .append_pool = append_pool(),
       .allocation_pool = allocation_pool_.get(),
+      .log_sync_pool = log_sync_pool(),
       .retryable_requests = nullptr,
   };
   RETURN_NOT_OK(BootstrapTablet(data, &tablet, &log, &consensus_info));
@@ -1259,7 +1232,9 @@ Result<uint32_t> SysCatalogTable::ReadPgClassRelnamespace(const uint32_t databas
   }
 
   if (oid == kInvalidOid) {
-    return STATUS(Corruption, "Not found or invalid relnamespace oid for table oid " +
+    // This error is thrown in the case that the table is deleted in YSQL but not docdb.
+    // Currently, this is checked for in the backup flow, see gh #13361.
+    return STATUS(NotFound, "Not found or invalid relnamespace oid for table oid " +
         std::to_string(table_oid));
   }
 

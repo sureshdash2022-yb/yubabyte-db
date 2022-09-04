@@ -21,6 +21,7 @@ import com.yugabyte.yw.commissioner.BaseTaskDependencies;
 import com.yugabyte.yw.commissioner.UserTaskDetails;
 import com.yugabyte.yw.commissioner.tasks.UniverseDefinitionTaskBase.ServerType;
 import com.yugabyte.yw.commissioner.tasks.UniverseTaskBase;
+import com.yugabyte.yw.commissioner.tasks.XClusterConfigTaskBase;
 import com.yugabyte.yw.common.KubernetesManagerFactory;
 import com.yugabyte.yw.common.PlacementInfoUtil;
 import com.yugabyte.yw.common.certmgmt.CertificateDetails;
@@ -129,10 +130,7 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
   public static class Params extends UniverseTaskParams {
     public UUID providerUUID;
     public CommandType commandType;
-    // We use the nodePrefix as Helm Chart's release name,
-    // so we would need that for any sort helm operations.
-    // TODO(bhavin192): rename this to helmReleaseName for clarity.
-    public String nodePrefix;
+    public String helmReleaseName;
     public String namespace;
     public boolean isReadOnlyCluster;
     public String ybSoftwareVersion = null;
@@ -142,6 +140,8 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
     public ServerType serverType = ServerType.EITHER;
     public int tserverPartition = 0;
     public int masterPartition = 0;
+    public Map<String, Object> universeOverrides;
+    public Map<String, Object> azOverrides;
 
     // Master addresses in multi-az case (to have control over different deployments).
     public String masterAddresses = null;
@@ -195,9 +195,11 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
                 taskParams().ybSoftwareVersion,
                 config,
                 taskParams().providerUUID,
-                taskParams().nodePrefix,
+                taskParams().helmReleaseName,
                 taskParams().namespace,
-                overridesFile);
+                overridesFile,
+                taskParams().universeOverrides,
+                taskParams().azOverrides);
         break;
       case HELM_UPGRADE:
         overridesFile = this.generateHelmOverride();
@@ -206,9 +208,11 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
             .helmUpgrade(
                 taskParams().ybSoftwareVersion,
                 config,
-                taskParams().nodePrefix,
+                taskParams().helmReleaseName,
                 taskParams().namespace,
-                overridesFile);
+                overridesFile,
+                taskParams().universeOverrides,
+                taskParams().azOverrides);
         break;
       case UPDATE_NUM_NODES:
         int numNodes = this.getNumNodes();
@@ -221,7 +225,7 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
               .getManager()
               .updateNumNodes(
                   config,
-                  taskParams().nodePrefix,
+                  taskParams().helmReleaseName,
                   taskParams().namespace,
                   numNodes,
                   newNamingStyle);
@@ -230,12 +234,12 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
       case HELM_DELETE:
         kubernetesManagerFactory
             .getManager()
-            .helmDelete(config, taskParams().nodePrefix, taskParams().namespace);
+            .helmDelete(config, taskParams().helmReleaseName, taskParams().namespace);
         break;
       case VOLUME_DELETE:
         kubernetesManagerFactory
             .getManager()
-            .deleteStorage(config, taskParams().nodePrefix, taskParams().namespace);
+            .deleteStorage(config, taskParams().helmReleaseName, taskParams().namespace);
         break;
       case NAMESPACE_DELETE:
         kubernetesManagerFactory.getManager().deleteNamespace(config, taskParams().namespace);
@@ -269,7 +273,7 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
       List<Service> services =
           kubernetesManagerFactory
               .getManager()
-              .getServices(config, taskParams().nodePrefix, taskParams().namespace);
+              .getServices(config, taskParams().helmReleaseName, taskParams().namespace);
 
       services.forEach(
           service -> {
@@ -292,6 +296,7 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
     Map<UUID, Map<String, String>> azToConfig = PlacementInfoUtil.getConfigPerAZ(pi);
     Map<UUID, String> azToDomain = PlacementInfoUtil.getDomainPerAZ(pi);
     boolean isMultiAz = PlacementInfoUtil.isMultiAZ(Provider.get(taskParams().providerUUID));
+    String nodePrefix = u.getUniverseDetails().nodePrefix;
 
     for (Entry<UUID, Map<String, String>> entry : azToConfig.entrySet()) {
       UUID azUUID = entry.getKey();
@@ -299,21 +304,20 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
       String regionName = AvailabilityZone.get(azUUID).region.code;
       Map<String, String> config = entry.getValue();
 
-      String nodePrefix =
-          isMultiAz
-              ? String.format("%s-%s", taskParams().nodePrefix, azName)
-              : taskParams().nodePrefix;
+      String helmReleaseName =
+          PlacementInfoUtil.getHelmReleaseName(
+              isMultiAz, nodePrefix, azName, taskParams().isReadOnlyCluster);
       String namespace =
           PlacementInfoUtil.getKubernetesNamespace(
               isMultiAz,
-              taskParams().nodePrefix,
+              nodePrefix,
               azName,
               config,
               u.getUniverseDetails().useNewHelmNamingStyle,
               taskParams().isReadOnlyCluster);
 
       List<Pod> podInfos =
-          kubernetesManagerFactory.getManager().getPodInfos(config, nodePrefix, namespace);
+          kubernetesManagerFactory.getManager().getPodInfos(config, helmReleaseName, namespace);
       for (Pod podInfo : podInfos) {
         ObjectNode pod = Json.newObject();
         pod.put("startTime", podInfo.getStatus().getStartTime());
@@ -755,6 +759,11 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
     if (placementUuid != null && masterOverrides.get("placement_uuid") == null) {
       masterOverrides.put("placement_uuid", placementUuid.toString());
     }
+    if (u.getUniverseDetails().xClusterInfo.isSourceRootCertDirPathGflagConfigured()) {
+      masterOverrides.put(
+          XClusterConfigTaskBase.SOURCE_ROOT_CERTS_DIR_GFLAG,
+          u.getUniverseDetails().xClusterInfo.sourceRootCertDirPath);
+    }
     if (!masterOverrides.isEmpty()) {
       gflagOverrides.put("master", masterOverrides);
     }
@@ -787,6 +796,11 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
     }
     if (placementUuid != null && tserverOverrides.get("placement_uuid") == null) {
       tserverOverrides.put("placement_uuid", placementUuid.toString());
+    }
+    if (u.getUniverseDetails().xClusterInfo.isSourceRootCertDirPathGflagConfigured()) {
+      tserverOverrides.put(
+          XClusterConfigTaskBase.SOURCE_ROOT_CERTS_DIR_GFLAG,
+          u.getUniverseDetails().xClusterInfo.sourceRootCertDirPath);
     }
     if (!tserverOverrides.isEmpty()) {
       gflagOverrides.put("tserver", tserverOverrides);
@@ -866,7 +880,7 @@ public class KubernetesCommandExecutor extends UniverseTaskBase {
     // this call a couple of times throughout this method.
     if (u.getUniverseDetails().useNewHelmNamingStyle) {
       overrides.put("oldNamingStyle", false);
-      overrides.put("fullnameOverride", taskParams().nodePrefix);
+      overrides.put("fullnameOverride", taskParams().helmReleaseName);
     }
 
     try {

@@ -7,7 +7,10 @@ import static com.yugabyte.yw.common.AssertHelper.assertOk;
 import static com.yugabyte.yw.common.AssertHelper.assertPlatformException;
 import static com.yugabyte.yw.common.AssertHelper.assertUnauthorized;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
+import static play.mvc.Http.Status.BAD_REQUEST;
 import static play.test.Helpers.contentAsString;
 
 import com.google.common.collect.Lists;
@@ -17,6 +20,9 @@ import com.yugabyte.yw.common.FakeApiHelper;
 import com.yugabyte.yw.common.FakeDBApplication;
 import com.yugabyte.yw.common.ModelFactory;
 import com.yugabyte.yw.common.PlatformScheduler;
+import com.yugabyte.yw.common.PlatformServiceException;
+import com.yugabyte.yw.common.config.impl.RuntimeConfig;
+import com.yugabyte.yw.common.config.impl.SettableRuntimeConfigFactory;
 import com.yugabyte.yw.controllers.handlers.NodeAgentHandler;
 import com.yugabyte.yw.forms.NodeAgentForm;
 import com.yugabyte.yw.forms.NodeInstanceFormData;
@@ -28,8 +34,10 @@ import com.yugabyte.yw.models.NodeAgent.State;
 import com.yugabyte.yw.models.Provider;
 import com.yugabyte.yw.models.Region;
 import com.yugabyte.yw.models.Users;
-import com.yugabyte.yw.models.helpers.NodeConfiguration;
+import com.yugabyte.yw.models.helpers.NodeConfig;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -44,6 +52,8 @@ public class NodeAgentControllerTest extends FakeDBApplication {
   @Mock private Config mockAppConfig;
   @Mock private ConfigHelper mockConfigHelper;
   @Mock private PlatformScheduler mockPlatformScheduler;
+
+  private SettableRuntimeConfigFactory runtimeConfigFactory;
   private NodeAgentHandler nodeAgentHandler;
   private Customer customer;
   private Provider provider;
@@ -55,6 +65,23 @@ public class NodeAgentControllerTest extends FakeDBApplication {
   public void setup() {
     customer = ModelFactory.testCustomer();
     provider = ModelFactory.onpremProvider(customer);
+    runtimeConfigFactory = app.injector().instanceOf(SettableRuntimeConfigFactory.class);
+    RuntimeConfig<Provider> providerConfig = runtimeConfigFactory.forProvider(provider);
+    String nodeAgentConfig = "yb.node_agent.preflight_checks.";
+    providerConfig.setValue(nodeAgentConfig + "internet_connection", "true");
+    providerConfig.setValue(nodeAgentConfig + "python_version", "2.7");
+    providerConfig.setValue(nodeAgentConfig + "min_ram_size_mb", "2");
+    providerConfig.setValue(nodeAgentConfig + "prometheus_no_node_exporter", "true");
+    providerConfig.setValue(nodeAgentConfig + "ports", "true");
+    providerConfig.setValue(nodeAgentConfig + "ntp_service", "true");
+    providerConfig.setValue(nodeAgentConfig + "min_tmp_dir_space_mb", "100");
+    providerConfig.setValue(nodeAgentConfig + "min_cpu_cores", "1");
+    providerConfig.setValue(nodeAgentConfig + "user", "fakeUser");
+    providerConfig.setValue(nodeAgentConfig + "user_group", "fakeGroup");
+    providerConfig.setValue(nodeAgentConfig + "min_prometheus_space_mb", "100");
+    providerConfig.setValue(nodeAgentConfig + "pam_limits_writable", "true");
+    providerConfig.setValue(nodeAgentConfig + "mount_points", "true");
+    providerConfig.setValue(nodeAgentConfig + "min_home_dir_space_mb", "100");
     region = Region.create(provider, "region-1", "Region 1", "yb-image-1");
     zone = AvailabilityZone.createOrThrow(region, "az-1", "AZ 1", "subnet-1");
     user = ModelFactory.testUser(customer);
@@ -113,6 +140,7 @@ public class NodeAgentControllerTest extends FakeDBApplication {
     NodeAgent nodeAgent = Json.fromJson(Json.parse(contentAsString(result)), NodeAgent.class);
     assertNotNull(nodeAgent.uuid);
     UUID nodeAgentUuid = nodeAgent.uuid;
+
     // Ping for node state.
     result = pingNodeAgent(nodeAgentUuid);
     assertOk(result);
@@ -140,18 +168,26 @@ public class NodeAgentControllerTest extends FakeDBApplication {
     testNode.sshUser = "ssh-user";
     // Missing node configurations in the payload.
     result = assertPlatformException(() -> createNode(zone.uuid, testNode, jwt));
-    assertBadRequest(result, "Invalid configurations");
-    NodeConfiguration nodeConfig = new NodeConfiguration();
-    testNode.nodeConfigurations = Sets.newSet(nodeConfig);
-    nodeConfig.setType(NodeConfiguration.Type.NTP_SERVICE_STATUS);
-    // Set an unaccepted value.
-    nodeConfig.setValue("stopped");
-    result = assertPlatformException(() -> createNode(zone.uuid, testNode, jwt));
-    assertBadRequest(result, "Invalid configurations");
+    assertEquals(result.status(), BAD_REQUEST);
     // Accepted value for NTP_SERVICE_STATUS is "running".
-    nodeConfig.setValue("running");
+    testNode.nodeConfigs = getTestNodeConfigsSet();
     result = createNode(zone.uuid, testNode, jwt);
     assertOk(result);
+
+    NodeConfig pamNode =
+        testNode
+            .nodeConfigs
+            .stream()
+            .filter(n -> n.type == NodeConfig.Type.PAM_LIMITS_WRITABLE)
+            .findFirst()
+            .get();
+    NodeConfig errCheck = new NodeConfig(NodeConfig.Type.PAM_LIMITS_WRITABLE, "false");
+    testNode.nodeConfigs.remove(pamNode);
+    testNode.nodeConfigs.add(errCheck);
+    // Set an unaccepted value.
+    result = assertPlatformException(() -> createNode(zone.uuid, testNode, jwt));
+    // Missing preflight checks should return an error
+    assertEquals(result.status(), BAD_REQUEST);
     result = unregisterNodeAgent(nodeAgentUuid, jwt);
     assertOk(result);
     result = assertPlatformException(() -> getNodeAgent(nodeAgentUuid, jwt));
@@ -169,19 +205,21 @@ public class NodeAgentControllerTest extends FakeDBApplication {
     NodeAgent nodeAgent = Json.fromJson(Json.parse(contentAsString(result)), NodeAgent.class);
     assertNotNull(nodeAgent.uuid);
     UUID nodeAgentUuid = nodeAgent.uuid;
+    String certPath = nodeAgent.config.get(NodeAgent.CERT_DIR_PATH_PROPERTY);
     // Ping for node state.
     result = pingNodeAgent(nodeAgentUuid);
     assertOk(result);
     State state = Json.fromJson(Json.parse(contentAsString(result)), State.class);
     assertEquals(State.REGISTERING, state);
-    String jwt = nodeAgentHandler.getClientToken(nodeAgentUuid, user.uuid);
+    AtomicReference<String> jwtRef =
+        new AtomicReference<>(nodeAgentHandler.getClientToken(nodeAgentUuid, user.uuid));
     result = assertPlatformException(() -> registerNodeAgent(formData));
     assertBadRequest(result, "Node agent is already registered");
-    result = getNodeAgent(nodeAgentUuid, jwt);
+    result = getNodeAgent(nodeAgentUuid, jwtRef.get());
     assertOk(result);
     // Report live to the server.
     formData.state = State.LIVE;
-    result = updateNodeState(nodeAgentUuid, formData, jwt);
+    result = updateNodeState(nodeAgentUuid, formData, jwtRef.get());
     assertOk(result);
     // Ping for node state.
     result = pingNodeAgent(nodeAgentUuid);
@@ -200,7 +238,7 @@ public class NodeAgentControllerTest extends FakeDBApplication {
     assertEquals(State.UPGRADE, state);
     // Report upgrading to the server.
     formData.state = State.UPGRADING;
-    result = updateNodeState(nodeAgentUuid, formData, jwt);
+    result = updateNodeState(nodeAgentUuid, formData, jwtRef.get());
     assertOk(result);
     // Ping for node state.
     result = pingNodeAgent(nodeAgentUuid);
@@ -208,12 +246,34 @@ public class NodeAgentControllerTest extends FakeDBApplication {
     state = Json.fromJson(Json.parse(contentAsString(result)), State.class);
     assertEquals(State.UPGRADING, state);
     // Reach out to the server to refresh certs.
-    result = updateNode(nodeAgentUuid, jwt);
+    result = updateNode(nodeAgentUuid, jwtRef.get());
     assertOk(result);
-    // Report live to the server.
+    nodeAgent = Json.fromJson(Json.parse(contentAsString(result)), NodeAgent.class);
+    assertEquals(certPath, nodeAgent.config.get(NodeAgent.CERT_DIR_PATH_PROPERTY));
+    // Complete upgrading.
+    formData.state = State.UPGRADED;
+    result = updateNodeState(nodeAgentUuid, formData, jwtRef.get());
+    assertOk(result);
+    nodeAgent = Json.fromJson(Json.parse(contentAsString(result)), NodeAgent.class);
+    assertNotEquals(certPath, nodeAgent.config.get(NodeAgent.CERT_DIR_PATH_PROPERTY));
+    certPath = nodeAgent.config.get(NodeAgent.CERT_DIR_PATH_PROPERTY);
+    // Ping for node state.
+    result = pingNodeAgent(nodeAgentUuid);
+    assertOk(result);
+    state = Json.fromJson(Json.parse(contentAsString(result)), State.class);
+    assertEquals(State.UPGRADED, state);
+    // Restart the node agent and report live to the server.
     formData.state = State.LIVE;
-    result = updateNodeState(nodeAgentUuid, formData, jwt);
+    // Old key is invalid.
+    assertThrows(
+        "Invalid token",
+        PlatformServiceException.class,
+        () -> updateNodeState(nodeAgentUuid, formData, jwtRef.get()));
+    jwtRef.set(nodeAgentHandler.getClientToken(nodeAgentUuid, user.uuid));
+    result = updateNodeState(nodeAgentUuid, formData, jwtRef.get());
     assertOk(result);
+    nodeAgent = Json.fromJson(Json.parse(contentAsString(result)), NodeAgent.class);
+    assertEquals(certPath, nodeAgent.config.get(NodeAgent.CERT_DIR_PATH_PROPERTY));
     // Ping for node state.
     result = pingNodeAgent(nodeAgentUuid);
     assertOk(result);
@@ -225,24 +285,41 @@ public class NodeAgentControllerTest extends FakeDBApplication {
     testNode.zone = zone.code;
     testNode.instanceType = "fake_instance_type";
     testNode.sshUser = "ssh-user";
-    // JWT signed with the old key is invalid after the upgrade.
-    result = assertPlatformException(() -> createNode(zone.uuid, testNode, jwt));
-    assertUnauthorized(result, "Invalid token");
     // Get a new JWT after the update.
     String updatedJwt = nodeAgentHandler.getClientToken(nodeAgentUuid, user.uuid);
-    NodeConfiguration nodeConfig = new NodeConfiguration();
-    testNode.nodeConfigurations = Sets.newSet(nodeConfig);
-    nodeConfig.setType(NodeConfiguration.Type.NTP_SERVICE_STATUS);
-    nodeConfig.setValue("stopped");
+    NodeConfig nodeConfig = new NodeConfig();
+    testNode.nodeConfigs = Sets.newSet(nodeConfig);
+    nodeConfig.setType(NodeConfig.Type.NTP_SERVICE_STATUS);
+    nodeConfig.setValue("true");
+    // Missing preflight checks should return an error
     result = assertPlatformException(() -> createNode(zone.uuid, testNode, updatedJwt));
-    assertBadRequest(result, "Invalid configurations");
+    assertEquals(result.status(), BAD_REQUEST);
     // Accepted value for NTP_SERVICE_STATUS is "running".
-    nodeConfig.setValue("running");
+    testNode.nodeConfigs = getTestNodeConfigsSet();
     result = createNode(zone.uuid, testNode, updatedJwt);
     assertOk(result);
     result = unregisterNodeAgent(nodeAgentUuid, updatedJwt);
     assertOk(result);
     result = assertPlatformException(() -> getNodeAgent(nodeAgentUuid, updatedJwt));
     assertUnauthorized(result, "Invalid token");
+  }
+
+  public Set<NodeConfig> getTestNodeConfigsSet() {
+    Set<NodeConfig> nodeConfigs = Sets.newSet();
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.PROMETHEUS_NO_NODE_EXPORTER, "true"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.PYTHON_VERSION, "3.0.0"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.USER, "fakeUser"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.USER_GROUP, "fakeGroup"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.INTERNET_CONNECTION, "true"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.TMP_DIR_SPACE, "10000"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.PROMETHEUS_SPACE, "10000"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.PAM_LIMITS_WRITABLE, "true"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.HOME_DIR_SPACE, "10000"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.PORTS, "{\"54422\":\"true\"}"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.MOUNT_POINTS, "{\"/home/yugabyte\":\"true\"}"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.NTP_SERVICE_STATUS, "true"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.CPU_CORES, "1"));
+    nodeConfigs.add(new NodeConfig(NodeConfig.Type.RAM_SIZE, "6"));
+    return nodeConfigs;
   }
 }

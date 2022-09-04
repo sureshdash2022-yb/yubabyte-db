@@ -100,6 +100,7 @@ ADD_YB_TEST(pg_on_conflict-test)
 ADD_YB_TEST(pg_op_buffering-test)
 ADD_YB_TEST(pg_packed_row-test)
 ADD_YB_TEST(pg_pessimistic_locking-test)
+ADD_YB_TEST(pg_table_size-test)
 ADD_YB_TEST(pg_tablet_split-test)
 ADD_YB_TEST(pg_txn-test)
 ADD_YB_TEST(pg_wrapper-test)
@@ -132,7 +133,7 @@ endif()
 
 add_dependencies(
   initial_sys_catalog_snapshot
-  ${CREATE_INITIAL_SYS_CATALOG_SNAPSHOT_TARGET_NAME} yb-master yb-tserver postgres)
+  ${CREATE_INITIAL_SYS_CATALOG_SNAPSHOT_TARGET_NAME} yb-master yb-tserver gen_auto_flags_json postgres)
 
 add_custom_target(
   update_ysql_migrations ALL

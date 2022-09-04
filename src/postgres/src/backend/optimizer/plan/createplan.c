@@ -142,6 +142,13 @@ static Plan *create_bitmap_subplan(PlannerInfo *root, Path *bitmapqual,
 					  List **qual, List **indexqual, List **indexECs);
 static void bitmap_subplan_mark_shared(Plan *plan);
 static List *flatten_partitioned_rels(List *partitioned_rels);
+static void extract_pushdown_clauses(List *restrictinfo_list,
+						 IndexOptInfo *indexinfo,
+						 List **local_qual,
+						 List **rel_remote_qual,
+						 List **rel_colrefs,
+						 List **idx_remote_qual,
+						 List **idx_colrefs);
 static TidScan *create_tidscan_plan(PlannerInfo *root, TidPath *best_path,
 					List *tlist, List *scan_clauses);
 static SubqueryScan *create_subqueryscan_plan(PlannerInfo *root,
@@ -179,14 +186,23 @@ static void copy_plan_costsize(Plan *dest, Plan *src);
 static void label_sort_with_costsize(PlannerInfo *root, Sort *plan,
 						 double limit_tuples);
 static SeqScan *make_seqscan(List *qptlist, List *qpqual, Index scanrelid);
+static YbSeqScan *make_yb_seqscan(List *qptlist,
+				List *local_qual,
+				List *remote_qual,
+				List *colrefs,
+				Index scanrelid);
 static SampleScan *make_samplescan(List *qptlist, List *qpqual, Index scanrelid,
 				TableSampleClause *tsc);
-static IndexScan *make_indexscan(List *qptlist, List *qpqual, Index scanrelid,
-			   Oid indexid, List *indexqual, List *indexqualorig,
+static IndexScan *make_indexscan(List *qptlist, List *qpqual,
+			   List *rel_colrefs, List *rel_remote_qual,
+			   List *idx_colrefs, List *idx_remote_qual,
+			   Index scanrelid, Oid indexid,
+			   List *indexqual, List *indexqualorig,
 			   List *indexorderby, List *indexorderbyorig,
-			   List *indexorderbyops,
+			   List *indexorderbyops, List *indextlist,
 			   ScanDirection indexscandir);
 static IndexOnlyScan *make_indexonlyscan(List *qptlist, List *qpqual,
+				   List *colrefs, List *remote_qual,
 				   Index scanrelid, Oid indexid,
 				   List *indexqual, List *indexorderby,
 				   List *indextlist,
@@ -381,6 +397,7 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 	switch (best_path->pathtype)
 	{
 		case T_SeqScan:
+		case T_YbSeqScan:
 		case T_SampleScan:
 		case T_IndexScan:
 		case T_IndexOnlyScan:
@@ -626,9 +643,7 @@ create_scan_plan(PlannerInfo *root, Path *best_path, int flags)
 	switch (best_path->pathtype)
 	{
 		case T_SeqScan:
-			plan = (Plan *) create_seqscan_plan(root,
-												best_path,
-												tlist,
+			plan = (Plan *) create_seqscan_plan(root, best_path, tlist,
 												scan_clauses);
 			break;
 
@@ -3227,6 +3242,9 @@ create_seqscan_plan(PlannerInfo *root, Path *best_path,
 {
 	SeqScan    *scan_plan;
 	Index		scan_relid = best_path->parent->relid;
+	List	   *local_qual = NIL;
+	List	   *remote_qual = NIL;
+	List	   *colrefs = NIL;
 
 	/* it should be a base rel... */
 	Assert(scan_relid > 0);
@@ -3236,18 +3254,24 @@ create_seqscan_plan(PlannerInfo *root, Path *best_path,
 	scan_clauses = order_qual_clauses(root, scan_clauses);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
-	scan_clauses = extract_actual_clauses(scan_clauses, false);
+	if (best_path->parent->is_yb_relation)
+		extract_pushdown_clauses(scan_clauses, NULL, &local_qual,
+								 &remote_qual, &colrefs, NULL, NULL);
+	else
+		local_qual = extract_actual_clauses(scan_clauses, false);
 
 	/* Replace any outer-relation variables with nestloop params */
 	if (best_path->param_info)
 	{
-		scan_clauses = (List *)
-			replace_nestloop_params(root, (Node *) scan_clauses);
+		local_qual = (List *)
+			replace_nestloop_params(root, (Node *) local_qual);
 	}
 
-	scan_plan = make_seqscan(tlist,
-							 scan_clauses,
-							 scan_relid);
+	if (best_path->parent->is_yb_relation)
+		scan_plan = (SeqScan *) make_yb_seqscan(tlist, local_qual, remote_qual,
+												colrefs, scan_relid);
+	else
+		scan_plan = make_seqscan(tlist, local_qual, scan_relid);
 
 	copy_generic_path_info(&scan_plan->plan, best_path);
 
@@ -3300,6 +3324,99 @@ create_samplescan_plan(PlannerInfo *root, Path *best_path,
 	return scan_plan;
 }
 
+static inline bool
+YbIsHashCodeFunc(FuncExpr *func)
+{
+	return func && func->funcid == YB_HASH_CODE_OID;
+}
+
+/*
+ * This function changes attribute numbers for each yb_hash_code function
+ * argument. Initially arguments use attribute numbers from relation.
+ * After the change attribute numbers will be taken from index which is used
+ * for the yb_hash_code pushdown.
+ */
+static bool
+YbFixHashCodeFuncArgs(FuncExpr *hash_code_func, const IndexOptInfo *index)
+{
+	Assert(YbIsHashCodeFunc(hash_code_func));
+	ListCell *l;
+	int indexcol = 0;
+	foreach(l, hash_code_func->args)
+	{
+		Node *arg_node = (Node *)lfirst(l);
+		Var *arg_var = (Var *)(IsA(arg_node, Var) ? arg_node : NULL);
+		if (!arg_var ||
+		    indexcol >= index->nkeycolumns ||
+		    index->rel->relid != arg_var->varno ||
+		    index->indexkeys[indexcol] != arg_var->varattno ||
+		    index->opcintype[indexcol] != arg_var->vartype)
+				return false;
+		/*
+		 * Note: In spite of the fact that YSQL will use secodary index for handling
+		 * the yb_hash_code pushdown the arg_var->varno field should not be changed
+		 * to INDEX_VAR as postgres does for its native functional indexes.
+		 * Because from the postgres's point of view neither the yb_hash_code
+		 * function itself not its arguments will not be converted into index
+		 * columns.
+		 */
+		arg_var->varattno = indexcol + 1;
+		++indexcol;
+	}
+	return true;
+}
+
+static bool
+YbFixHashCodeFuncArgsWalker(Node *node, IndexOptInfo *index)
+{
+	FuncExpr *func = (FuncExpr *)(IsA(node, FuncExpr) ? node : NULL);
+
+	if (YbIsHashCodeFunc(func) && !YbFixHashCodeFuncArgs(func, index))
+		elog(ERROR, "bad call of yb_hash_code");
+
+	return expression_tree_walker(
+		node, &YbFixHashCodeFuncArgsWalker, index);
+}
+
+static bool
+YbHasHashCodeFuncWalker(Node *node, bool *hash_code_func_found)
+{
+	if (*hash_code_func_found)
+		return true;
+
+	FuncExpr *func = (FuncExpr *)(IsA(node, FuncExpr) ? node : NULL);
+
+	if (YbIsHashCodeFunc(func))
+	{
+		*hash_code_func_found = true;
+		return true;
+	}
+
+	return expression_tree_walker(
+		node, &YbHasHashCodeFuncWalker, hash_code_func_found);
+}
+
+/*
+ * In case indexquals has at least one yb_hash_code qual function makes
+ * a copy of indexquals and alters yb_hash_code function args attrributes.
+ * In other cases functions returns NULL.
+ */
+static List*
+YbBuildIndexqualForRecheck(List *indexquals, IndexOptInfo* indexinfo)
+{
+	bool has_hash_code_func = false;
+	expression_tree_walker(
+		(Node *)indexquals, &YbHasHashCodeFuncWalker, &has_hash_code_func);
+	if (has_hash_code_func)
+	{
+		List *result = copyObject(indexquals);
+		expression_tree_walker(
+			(Node *)result, &YbFixHashCodeFuncArgsWalker, indexinfo);
+		return result;
+	}
+	return NULL;
+}
+
 /*
  * create_indexscan_plan
  *	  Returns an indexscan plan for the base relation scanned by 'best_path'
@@ -3323,6 +3440,11 @@ create_indexscan_plan(PlannerInfo *root,
 	Index		baserelid = best_path->path.parent->relid;
 	Oid			indexoid = best_path->indexinfo->indexoid;
 	List	   *qpqual;
+	List	   *local_qual = NIL;
+	List	   *rel_remote_qual = NIL;
+	List	   *rel_colrefs = NIL;
+	List	   *idx_remote_qual = NIL;
+	List	   *idx_colrefs = NIL;
 	List	   *stripped_indexquals;
 	List	   *fixed_indexquals;
 	List	   *fixed_indexorderbys;
@@ -3399,7 +3521,30 @@ create_indexscan_plan(PlannerInfo *root,
 	qpqual = order_qual_clauses(root, qpqual);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
-	qpqual = extract_actual_clauses(qpqual, false);
+	if (best_path->path.parent->is_yb_relation)
+	{
+		/*
+		 * If indexonly, all referenced columns are available from the index,
+		 * there is no point to pass in indexinfo to check this.
+		 * Other case when we should skip extracting index clauses is if the
+		 * index is primary.
+		 */
+		bool need_idx_remote = !indexonly;
+		if (need_idx_remote)
+		{
+			Relation index;
+			index = RelationIdGetRelation(best_path->indexinfo->indexoid);
+			if (index->rd_index->indisprimary)
+				need_idx_remote = false;
+			RelationClose(index);
+		}
+		extract_pushdown_clauses(qpqual,
+								 need_idx_remote ? best_path->indexinfo : NULL,
+								 &local_qual, &rel_remote_qual, &rel_colrefs,
+								 &idx_remote_qual, &idx_colrefs);
+	}
+	else
+		local_qual = extract_actual_clauses(qpqual, false);
 
 	/*
 	 * We have to replace any outer-relation variables with nestloop params in
@@ -3414,8 +3559,8 @@ create_indexscan_plan(PlannerInfo *root,
 	{
 		stripped_indexquals = (List *)
 			replace_nestloop_params(root, (Node *) stripped_indexquals);
-		qpqual = (List *)
-			replace_nestloop_params(root, (Node *) qpqual);
+		local_qual = (List *)
+			replace_nestloop_params(root, (Node *) local_qual);
 		indexorderbys = (List *)
 			replace_nestloop_params(root, (Node *) indexorderbys);
 	}
@@ -3456,17 +3601,29 @@ create_indexscan_plan(PlannerInfo *root,
 
 	/* Finally ready to build the plan node */
 	if (indexonly)
-		scan_plan = (Scan *) make_indexonlyscan(tlist,
-												qpqual,
+	{
+		IndexOnlyScan* index_only_scan_plan = make_indexonlyscan(tlist,
+												local_qual,
+												rel_colrefs,
+												rel_remote_qual,
 												baserelid,
 												indexoid,
 												fixed_indexquals,
 												fixed_indexorderbys,
 												best_path->indexinfo->indextlist,
 												best_path->indexscandir);
+		index_only_scan_plan->yb_indexqual_for_recheck =
+			YbBuildIndexqualForRecheck(fixed_indexquals, best_path->indexinfo);
+
+		scan_plan = (Scan *) index_only_scan_plan;
+	}
 	else
 		scan_plan = (Scan *) make_indexscan(tlist,
-											qpqual,
+											local_qual,
+											rel_colrefs,
+											rel_remote_qual,
+											idx_colrefs,
+											idx_remote_qual,
 											baserelid,
 											indexoid,
 											fixed_indexquals,
@@ -3474,6 +3631,7 @@ create_indexscan_plan(PlannerInfo *root,
 											fixed_indexorderbys,
 											indexorderbys,
 											indexorderbyops,
+											best_path->indexinfo->indextlist,
 											best_path->indexscandir);
 
 	copy_generic_path_info(&scan_plan->plan, &best_path->path);
@@ -5629,6 +5787,106 @@ flatten_partitioned_rels(List *partitioned_rels)
 	return newlist;
 }
 
+/*
+ * is_index_only_refs
+ *		Check if all column references from the list are available from the
+ *		index described by the indexinfo.
+ */
+static bool
+is_index_only_refs(List *expr_refs, IndexOptInfo *indexinfo)
+{
+	ListCell *lc;
+	foreach (lc, expr_refs)
+	{
+		bool found = false;
+		YbExprParamDesc *colref = castNode(YbExprParamDesc, lfirst(lc));
+		for (int i = 0; i < indexinfo->ncolumns; i++)
+		{
+			if (colref->attno == indexinfo->indexkeys[i])
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			return false;
+	}
+	return true;
+}
+
+/*
+ * extract_pushdown_clauses
+ *	  Extract actual clauses from RestrictInfo list and distribute them
+ * 	  between three groups:
+ *	  - local_qual - conditions not eligible for pushdown. They are evaluated
+ *	  on the Postgres side on the rows fetched from DocDB;
+ *	  - rel_remote_qual - conditions to pushdown with the request to the main
+ *	  scanned relation. In the case of sequential scan or index only scan
+ *	  the DocDB table or DocDB index respectively is the main (and only)
+ *	  scanned relation, so the function returns only two groups;
+ *	  - idx_remote_qual - conditions to pushdown with the request to the
+ *	  secondary (index) relation. Used with the index scan on a secondary
+ *	  index, and caller must provide IndexOptInfo record for the index.
+ *	  - rel_colrefs, idx_colrefs are columns referenced by respective
+ *	  rel_remote_qual or idx_remote_qual.
+ *	  The output parameters local_qual, rel_remote_qual, rel_colrefs must
+ *	  point to valid lists. The output parameters idx_remote_qual and
+ *	  idx_colrefs may be NULL if the indexinfo is NULL.
+ */
+static void
+extract_pushdown_clauses(List *restrictinfo_list,
+						 IndexOptInfo *indexinfo,
+						 List **local_qual,
+						 List **rel_remote_qual,
+						 List **rel_colrefs,
+						 List **idx_remote_qual,
+						 List **idx_colrefs)
+{
+	ListCell *lc;
+	foreach(lc, restrictinfo_list)
+	{
+		RestrictInfo *ri = lfirst_node(RestrictInfo, lc);
+		/* ignore pseudoconstants */
+		if (ri->pseudoconstant)
+			continue;
+
+		if (ri->yb_pushable)
+		{
+			List *expr_refs = NIL;
+			bool pushable PG_USED_FOR_ASSERTS_ONLY;
+
+			/*
+			 * Find column references. It has already been determined that
+			 * the expression is pushable.
+			 */
+			pushable = YbCanPushdownExpr(ri->clause, &expr_refs);
+			Assert(pushable);
+
+			/*
+			 * If there are both main and secondary (index) relations,
+			 * determine one to pushdown the condition. It is more efficient
+			 * to apply filter earlier, so prefer index, if it has all the
+			 * necessary columns.
+			 */
+			if (indexinfo == NULL ||
+				!is_index_only_refs(expr_refs, indexinfo))
+			{
+				*rel_colrefs = list_concat(*rel_colrefs, expr_refs);
+				*rel_remote_qual = lappend(*rel_remote_qual, ri->clause);
+			}
+			else
+			{
+				*idx_colrefs = list_concat(*idx_colrefs, expr_refs);
+				*idx_remote_qual = lappend(*idx_remote_qual, ri->clause);
+			}
+		}
+		else
+		{
+			*local_qual = lappend(*local_qual, ri->clause);
+		}
+	}
+}
+
 /*****************************************************************************
  *
  *	PLAN NODE BUILDING ROUTINES
@@ -5660,6 +5918,28 @@ make_seqscan(List *qptlist,
 	return node;
 }
 
+static YbSeqScan *
+make_yb_seqscan(List *qptlist,
+				List *local_qual,
+				List *remote_qual,
+				List *colrefs,
+				Index scanrelid)
+{
+	YbSeqScan  *node = makeNode(YbSeqScan);
+	Plan	   *plan = &node->scan.plan;
+	PushdownExprs *remote = &node->remote;
+
+	plan->targetlist = qptlist;
+	plan->qual = local_qual;
+	plan->lefttree = NULL;
+	plan->righttree = NULL;
+	remote->qual = remote_qual;
+	remote->colrefs = colrefs;
+	node->scan.scanrelid = scanrelid;
+
+	return node;
+}
+
 static SampleScan *
 make_samplescan(List *qptlist,
 				List *qpqual,
@@ -5682,6 +5962,10 @@ make_samplescan(List *qptlist,
 static IndexScan *
 make_indexscan(List *qptlist,
 			   List *qpqual,
+			   List *rel_colrefs,
+			   List *rel_remote_qual,
+			   List *idx_colrefs,
+			   List *idx_remote_qual,
 			   Index scanrelid,
 			   Oid indexid,
 			   List *indexqual,
@@ -5689,6 +5973,7 @@ make_indexscan(List *qptlist,
 			   List *indexorderby,
 			   List *indexorderbyorig,
 			   List *indexorderbyops,
+			   List *indextlist,
 			   ScanDirection indexscandir)
 {
 	IndexScan  *node = makeNode(IndexScan);
@@ -5705,7 +5990,12 @@ make_indexscan(List *qptlist,
 	node->indexorderby = indexorderby;
 	node->indexorderbyorig = indexorderbyorig;
 	node->indexorderbyops = indexorderbyops;
+	node->indextlist = indextlist;
 	node->indexorderdir = indexscandir;
+	node->rel_remote.colrefs = rel_colrefs;
+	node->rel_remote.qual = rel_remote_qual;
+	node->index_remote.colrefs = idx_colrefs;
+	node->index_remote.qual = idx_remote_qual;
 
 	return node;
 }
@@ -5713,6 +6003,8 @@ make_indexscan(List *qptlist,
 static IndexOnlyScan *
 make_indexonlyscan(List *qptlist,
 				   List *qpqual,
+				   List *colrefs,
+				   List *remote_qual,
 				   Index scanrelid,
 				   Oid indexid,
 				   List *indexqual,
@@ -5733,6 +6025,8 @@ make_indexonlyscan(List *qptlist,
 	node->indexorderby = indexorderby;
 	node->indextlist = indextlist;
 	node->indexorderdir = indexscandir;
+	node->remote.colrefs = colrefs;
+	node->remote.qual = remote_qual;
 
 	return node;
 }

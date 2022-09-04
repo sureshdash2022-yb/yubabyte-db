@@ -24,7 +24,7 @@ You access your YugabyteDB Managed clusters via [YSQL](../../api/ysql/) and [YCQ
 
 See also [YugabyteDB Managed](https://www.yugabyte.com/cloud/) at yugabyte.com.
 
-YugabyteDB Managed runs on top of [YugabyteDB Anywhere](../../yugabyte-platform/overview/).
+YugabyteDB Managed runs on top of [YugabyteDB Anywhere](../../yugabyte-platform/).
 
 ### How is YugabyteDB Managed priced?
 
@@ -201,7 +201,7 @@ For detailed steps for configuring other popular third party tools, see [Third p
 
 #### Applications
 
-Applications connect to and interact with YugabyteDB using API client libraries (also known as client drivers). Before you can connect an application, you need to install the correct driver. Clusters have SSL (encryption in-transit) enabled so make sure your driver details include SSL parameters. To build sample applications using popular drivers, refer to [Build an application](../../yugabyte-cloud/cloud-quickstart/cloud-build-apps/).
+Applications connect to and interact with YugabyteDB using API client libraries (also known as client drivers). Before you can connect an application, you need to install the correct driver. Clusters have SSL (encryption in-transit) enabled so make sure your driver details include SSL parameters. To build sample applications using popular drivers, refer to [Build an application](../../develop/build-apps/).
 
 Before you can connect, your application has to be able to reach your YugabyteDB Managed. To add inbound network access from your application environment to YugabyteDB Managed, add the public IP addresses to the [cluster IP access list](../../yugabyte-cloud/cloud-secure-clusters/add-connections/), or use [VPC peering](../../yugabyte-cloud/cloud-basics/cloud-vpcs/) to add private IP addresses.
 

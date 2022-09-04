@@ -177,6 +177,7 @@ set(TSERVER_SRCS
   pg_create_table.cc
   pg_table_cache.cc
   read_query.cc
+  remote_bootstrap_anchor_client.cc
   remote_bootstrap_client.cc
   remote_bootstrap_file_downloader.cc
   remote_bootstrap_service.cc
@@ -264,7 +265,7 @@ add_library(tserver_test_util
   tablet_server-test-base.cc
   tablet_server_test_util.cc
   universe_key_test_util.cc)
-target_link_libraries(tserver_test_util tablet_test_util tserver yb_test_util)
+target_link_libraries(tserver_test_util tablet_test_util tserver yb_test_util yb_util)
 
 #########################################
 # tserver tests

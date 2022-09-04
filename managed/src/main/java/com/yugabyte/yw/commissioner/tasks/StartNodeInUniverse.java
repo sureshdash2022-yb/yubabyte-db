@@ -142,12 +142,13 @@ public class StartNodeInUniverse extends UniverseDefinitionTaskBase {
           .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
 
       // Start yb-controller process
-      if (CommonUtils.canConfigureYbc(universe)) {
+      if (universe.isYbcEnabled()) {
         createStartYbcTasks(Arrays.asList(currentNode))
             .setSubTaskGroupType(SubTaskGroupType.StartingNodeProcesses);
 
         // Wait for yb-controller to be responsive on each node.
-        createWaitForYbcServerTask().setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
+        createWaitForYbcServerTask(new HashSet<>(Arrays.asList(currentNode)))
+            .setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
       }
 
       if (masterAdded) {

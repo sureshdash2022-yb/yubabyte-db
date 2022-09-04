@@ -89,6 +89,9 @@ Build options:
   --resolve-java-dependencies
     Force Maven to download all Java dependencies to the local repository
 
+  --build-yugabyted-ui
+    Build yugabyted-ui. If specified with --cmake-only, it won't be built.
+
   --target, --targets
     Pass the given target or set of targets to make or ninja.
   --rebuild-file <source_file_to_rebuild>
@@ -429,6 +432,11 @@ capture_sec_timestamp() {
   eval "${1}_time_sec=$current_timestamp"
 }
 
+run_yugabyted-ui_build() {
+  # This is a standalone build script.  It honors BUILD_ROOT from the env
+  "${YB_SRC_ROOT}/yugabyted-ui/build.sh"
+}
+
 run_cxx_build() {
   expect_vars_to_be_set make_file
 
@@ -700,6 +708,7 @@ make_opts=()
 force=false
 build_cxx=true
 build_java=true
+build_yugabyted_ui=false
 run_java_tests=false
 save_log=false
 make_targets=()
@@ -929,6 +938,9 @@ while [[ $# -gt 0 ]]; do
       build_cxx=false
       java_only=true
     ;;
+    --build-yugabyted-ui)
+      build_yugabyted_ui=true
+    ;;
     --num-repetitions|--num-reps|-n)
       ensure_option_has_arg "$@"
       num_test_repetitions=$2
@@ -980,10 +992,10 @@ while [[ $# -gt 0 ]]; do
       set_cxx_test_name "$1"
     ;;
     master|yb-master)
-      make_targets+=( "yb-master" )
+      make_targets+=( "yb-master" "gen_auto_flags_json" )
     ;;
     tserver|yb-tserver)
-      make_targets+=( "yb-tserver" )
+      make_targets+=( "yb-tserver" "gen_auto_flags_json" )
     ;;
     initdb)
       set_initdb_target
@@ -996,7 +1008,7 @@ while [[ $# -gt 0 ]]; do
       make_targets+=( "postgres" )
     ;;
     daemons|yb-daemons)
-      make_targets+=( "yb-master" "yb-tserver" "postgres" "yb-admin" )
+      make_targets+=( "yb-master" "yb-tserver" "gen_auto_flags_json" "postgres" "yb-admin" )
     ;;
     packaged|packaged-targets)
       for packaged_target in $( "$YB_SRC_ROOT"/build-support/list_packaged_targets.py ); do
@@ -1554,9 +1566,8 @@ create_build_descriptor_file
 create_build_root_file
 
 if [[ ${#make_targets[@]} -eq 0 && -n $java_test_name ]]; then
-  # Build only yb-master / yb-tserver / postgres / update_ysql_migrations when we're only trying
-  # to run a Java test.
-  make_targets+=( yb-master yb-tserver postgres update_ysql_migrations )
+  # Build only a subset of targets when we're only trying to run a Java test.
+  make_targets+=( yb-master yb-tserver gen_auto_flags_json postgres update_ysql_migrations )
 fi
 
 if [[ $build_type == "compilecmds" ]]; then
@@ -1582,6 +1593,10 @@ if [[ ${build_cxx} == "true" ||
       ( "${YB_EXPORT_COMPILE_COMMANDS:-}" == "1" &&
         ! -f "${BUILD_ROOT}/compile_commands.json" ) ]]; then
   run_cxx_build
+fi
+
+if [[ ${build_yugabyted_ui} == "true" && ${cmake_only} != "true" ]]; then
+  run_yugabyted-ui_build
 fi
 
 export YB_JAVA_TEST_OFFLINE_MODE=0

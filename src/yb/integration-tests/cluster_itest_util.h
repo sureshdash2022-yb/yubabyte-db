@@ -449,6 +449,9 @@ Status GetTableLocations(MiniCluster* cluster,
                          RequireTabletsRunning require_tablets_running,
                          master::GetTableLocationsResponsePB* table_locations);
 
+// Get number of tablets of given table hosted by tserver.
+int GetNumTabletsOfTableOnTS(tserver::TabletServer* const tserver, const TableId& table_id);
+
 // Wait for the specified number of voters to be reported to the config on the
 // master for the specified tablet.
 Status WaitForNumVotersInConfigOnMaster(
@@ -471,6 +474,15 @@ Status WaitUntilTabletInState(TServerDetails* ts,
                               tablet::RaftGroupStatePB state,
                               const MonoDelta& timeout,
                               const MonoDelta& list_tablets_timeout = 10s);
+
+Status WaitUntilTabletInState(const master::TabletInfoPtr tablet,
+                              const std::string& ts_uuid,
+                              tablet::RaftGroupStatePB state);
+
+// Wait until tablet config change is relected to master.
+Status WaitForTabletConfigChange(const master::TabletInfoPtr tablet,
+                                 const std::string& ts_uuid,
+                                 consensus::ChangeConfigType type);
 
 // Wait until the specified tablet is in RUNNING state.
 Status WaitUntilTabletRunning(TServerDetails* ts,
@@ -503,13 +515,6 @@ Status GetLastOpIdForMasterReplica(
     const consensus::OpIdType opid_type,
     const MonoDelta& timeout,
     OpIdPB* op_id);
-
-Status WaitForAllIntentsApplied(TServerDetails* ts, const  MonoTime& deadline);
-
-Status WaitForAllIntentsApplied(TServerDetails* ts, const MonoDelta& timeout);
-
-Status WaitForAllIntentsApplied(
-    const vector<TServerDetails*>& tablet_servers, const MonoDelta& timeout);
 
 } // namespace itest
 } // namespace yb

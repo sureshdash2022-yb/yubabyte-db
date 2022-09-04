@@ -5,6 +5,7 @@ package com.yugabyte.yw.models.helpers;
 import static com.yugabyte.yw.common.NodeActionType.ADD;
 import static com.yugabyte.yw.common.NodeActionType.DELETE;
 import static com.yugabyte.yw.common.NodeActionType.QUERY;
+import static com.yugabyte.yw.common.NodeActionType.REBOOT;
 import static com.yugabyte.yw.common.NodeActionType.RELEASE;
 import static com.yugabyte.yw.common.NodeActionType.REMOVE;
 import static com.yugabyte.yw.common.NodeActionType.START;
@@ -87,7 +88,7 @@ public class NodeDetails {
     // Set after the YB specific GFlags are updated via Rolling Restart.
     UpdateGFlags(),
     // Set after all the services (master, tserver, etc) on a node are successfully running.
-    Live(STOP, REMOVE, QUERY),
+    Live(STOP, REMOVE, QUERY, REBOOT),
     // Set when node is about to enter the stopped state.
     // The actions in Live state should apply because of the transition from Live to Stopping.
     Stopping(STOP, REMOVE),
@@ -264,7 +265,7 @@ public class NodeDetails {
   @Override
   public String toString() {
     StringBuilder sb = new StringBuilder();
-    sb.append("name: ")
+    sb.append("{name: ")
         .append(nodeName)
         .append(", ")
         .append(cloudInfo.toString())
@@ -277,7 +278,8 @@ public class NodeDetails {
         .append(", azUuid: ")
         .append(azUuid)
         .append(", placementUuid: ")
-        .append(placementUuid);
+        .append(placementUuid)
+        .append("}");
     return sb.toString();
   }
 
@@ -292,7 +294,7 @@ public class NodeDetails {
     if (!isActionAllowedOnState(actionType)) {
       String msg =
           String.format(
-              "Node %s is not in %s, but is in one of %s, so action %s is not allowed.",
+              "Node %s is in %s state, but not in one of %s, so action %s is not allowed.",
               nodeName,
               state,
               StringUtils.join(NodeState.allowedStatesForAction(actionType), ","),
@@ -315,7 +317,8 @@ public class NodeDetails {
         || state == NodeState.Decommissioned
         || state == NodeState.SystemdUpgrade
         || state == NodeState.Terminating
-        || state == NodeState.Terminated);
+        || state == NodeState.Terminated
+        || state == NodeState.Rebooting);
   }
 
   @JsonIgnore

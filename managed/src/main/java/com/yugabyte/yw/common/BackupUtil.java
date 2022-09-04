@@ -20,7 +20,6 @@ import com.yugabyte.yw.models.configs.CustomerConfig;
 import com.yugabyte.yw.models.configs.data.CustomerConfigData;
 import com.yugabyte.yw.models.configs.data.CustomerConfigStorageData;
 import com.yugabyte.yw.models.configs.data.CustomerConfigStorageNFSData;
-import com.yugabyte.yw.models.configs.data.CustomerConfigStorageWithRegionsData;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.Backup.BackupCategory;
 import com.yugabyte.yw.models.helpers.CustomerConfigConsts;
@@ -37,6 +36,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -72,6 +73,7 @@ public class BackupUtil {
   public static final long MIN_SCHEDULE_DURATION_IN_SECS = 3600L;
   public static final long MIN_SCHEDULE_DURATION_IN_MILLIS = MIN_SCHEDULE_DURATION_IN_SECS * 1000L;
   public static final String BACKUP_SIZE_FIELD = "backup_size_in_bytes";
+  public static final String YBC_BACKUP_IDENTIFIER = "ybc_backup";
 
   public static final String YB_CLOUD_COMMAND_TYPE = "table";
   public static final String K8S_CERT_PATH = "/opt/certs/yugabyte/";
@@ -80,6 +82,13 @@ public class BackupUtil {
   public static final String REGION_LOCATIONS = "REGION_LOCATIONS";
   public static final String REGION_NAME = "REGION";
   public static final String SNAPSHOT_URL_FIELD = "snapshot_url";
+  public static final String YBC_BACKUP_LOCATION_IDENTIFIER_STRING =
+      "^univ-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+          + "[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+          + "/"
+          + YBC_BACKUP_IDENTIFIER;
+  public static final Pattern PATTERN_FOR_YBC_BACKUP_LOCATION =
+      Pattern.compile(YBC_BACKUP_LOCATION_IDENTIFIER_STRING);
 
   /**
    * Use for cases apart from customer configs. Currently used in backup listing API, and fetching
@@ -164,6 +173,7 @@ public class BackupUtil {
             .scheduleUUID(backup.getScheduleUUID())
             .customerUUID(backup.customerUUID)
             .universeUUID(backup.universeUUID)
+            .category(backup.category)
             .kmsConfigUUID(backup.getBackupInfo().kmsConfigUUID)
             .storageConfigUUID(backup.storageConfigUUID)
             .isStorageConfigPresent(isStorageConfigPresent)
@@ -208,30 +218,34 @@ public class BackupUtil {
   // universe UUID and backup UUID.
   // univ-<univ_uuid>/backup-<timestamp>-<something_to_disambiguate_from_yugaware>/table-keyspace
   // .table_name.table_uuid
-  public static String formatStorageLocation(BackupTableParams params) {
+  public static String formatStorageLocation(BackupTableParams params, boolean isYbc) {
     SimpleDateFormat tsFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
     String updatedLocation;
+    String backupLabel = isYbc ? YBC_BACKUP_IDENTIFIER : "backup";
     if (params.tableUUIDList != null) {
       updatedLocation =
           String.format(
-              "univ-%s/backup-%s-%d/multi-table-%s",
+              "univ-%s/%s-%s-%d/multi-table-%s",
               params.universeUUID,
+              backupLabel,
               tsFormat.format(new Date()),
               abs(params.backupUuid.hashCode()),
               params.getKeyspace());
     } else if (params.getTableName() == null && params.getKeyspace() != null) {
       updatedLocation =
           String.format(
-              "univ-%s/backup-%s-%d/keyspace-%s",
+              "univ-%s/%s-%s-%d/keyspace-%s",
               params.universeUUID,
+              backupLabel,
               tsFormat.format(new Date()),
               abs(params.backupUuid.hashCode()),
               params.getKeyspace());
     } else {
       updatedLocation =
           String.format(
-              "univ-%s/backup-%s-%d/table-%s.%s",
+              "univ-%s/%s-%s-%d/table-%s.%s",
               params.universeUUID,
+              backupLabel,
               tsFormat.format(new Date()),
               abs(params.backupUuid.hashCode()),
               params.getKeyspace(),
@@ -266,7 +280,8 @@ public class BackupUtil {
   public static void updateDefaultStorageLocation(
       BackupTableParams params, UUID customerUUID, BackupCategory category) {
     CustomerConfig customerConfig = CustomerConfig.get(customerUUID, params.storageConfigUUID);
-    params.storageLocation = formatStorageLocation(params);
+    boolean isYbc = category.equals(BackupCategory.YB_CONTROLLER);
+    params.storageLocation = formatStorageLocation(params, isYbc);
     if (customerConfig != null) {
       String backupLocation = null;
       if (customerConfig.name.equals(Util.NFS)) {
@@ -316,38 +331,65 @@ public class BackupUtil {
     if (config.name.equals(Util.NFS)) {
       return;
     }
-    CustomerConfigStorageWithRegionsData configWithRegions =
-        (CustomerConfigStorageWithRegionsData) config.getDataObject();
-    if (StringUtils.isBlank(configWithRegions.backupLocation)) {
+    CustomerConfigStorageData configData = (CustomerConfigStorageData) config.getDataObject();
+    if (StringUtils.isBlank(configData.backupLocation)) {
       throw new PlatformServiceException(BAD_REQUEST, "Default backup location cannot be empty");
     }
-    locations.add(configWithRegions.backupLocation);
-    if (CollectionUtils.isNotEmpty(configWithRegions.regionLocations)) {
-      configWithRegions.regionLocations.forEach(
-          rL -> {
-            if (StringUtils.isNotBlank(rL.region) && StringUtils.isNotBlank(rL.location)) {
-              locations.add(rL.location);
-            }
-          });
-    }
+    locations.add(configData.backupLocation);
+    Map<String, String> regionLocationsMap =
+        StorageUtil.getStorageUtil(config.name).getRegionLocationsMap(configData);
+    regionLocationsMap.forEach(
+        (r, bL) -> {
+          locations.add(bL);
+        });
     validateStorageConfigOnLocations(config, locations);
   }
 
+  /**
+   * Get exact storage location for regional locations, while persisting in backup object
+   *
+   * @param backupLocation The default location of the backup, containing the md/success file
+   * @param configDefaultLocation The default config location
+   * @param configRegionLocation The regional location from the config
+   * @return
+   */
   public static String getExactRegionLocation(
-      BackupTableParams backupTableParams, String regionLocation) {
-    String backupIdentifier =
-        getBackupIdentifier(backupTableParams.universeUUID, backupTableParams.storageLocation);
-    String location = String.format("%s/%s", regionLocation, backupIdentifier);
+      String backupLocation, String configDefaultLocation, String configRegionLocation) {
+    String backupIdentifier = getBackupIdentifier(configDefaultLocation, backupLocation, false);
+    String location = String.format("%s/%s", configRegionLocation, backupIdentifier);
     return location;
   }
 
-  // returns the /univ-<>/backup-<>-<>/some_identifier extracted from the default backup location.
-  public static String getBackupIdentifier(UUID universeUUID, String defaultBackupLocation) {
-    String universeString = String.format("univ-%s", universeUUID);
+  /**
+   * Check whether backup is taken via YB-Controller.
+   *
+   * @param configDefaultLocation
+   * @param backupLocation
+   * @return
+   */
+  public boolean isYbcBackup(String configDefaultLocation, String backupLocation) {
+    String backupIdentifier = getBackupIdentifier(configDefaultLocation, backupLocation, true);
+    return PATTERN_FOR_YBC_BACKUP_LOCATION.matcher(backupIdentifier).find();
+  }
+
+  /**
+   * Returns the univ-<>/backup-<>-<>/some_identifier extracted from the default backup location or
+   * yugabyte_backup/univ-<>/backup-<>-<>/something if YBC NFS backup and checkYbcNfs is false. If
+   * checkYbcNfs is set to true, it additionally checks for yugabyte_bucket/ in the location and
+   * removes it.
+   *
+   * @param checkYbcNfs Remove default nfs bucket name if true
+   * @param configDefaultLocation The default config location
+   * @param defaultbackupLocation The default location of the backup, containing the md/success file
+   */
+  public static String getBackupIdentifier(
+      String configDefaultLocation, String defaultBackupLocation, boolean checkYbcNfs) {
     String backupIdentifier =
-        String.format(
-            "%s%s",
-            universeString, StringUtils.substringAfterLast(defaultBackupLocation, universeString));
+        StringUtils.removeStart(defaultBackupLocation, configDefaultLocation + "/");
+    if (checkYbcNfs) {
+      backupIdentifier =
+          StringUtils.removeStart(backupIdentifier, NFSUtil.DEFAULT_YUGABYTE_NFS_BUCKET + "/");
+    }
     return backupIdentifier;
   }
 

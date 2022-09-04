@@ -67,6 +67,7 @@
 #include "yb/util/monotime.h"
 #include "yb/util/random_util.h"
 #include "yb/util/result.h"
+#include "yb/util/stol_utils.h"
 #include "yb/util/test_macros.h"
 #include "yb/util/thread.h"
 
@@ -458,6 +459,22 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     }
   }
 
+  int FindTserversWithCacheHit(
+      const CDCStreamId stream_id, const TabletId tablet_id, uint32_t num_tservers) {
+    int count = 0;
+    // check the CDC Service Cache of all the tservers.
+    for (uint32_t i = 0; i < num_tservers; ++i) {
+      const auto& tserver = test_cluster()->mini_tablet_server(i)->server();
+      auto cdc_service = dynamic_cast<CDCServiceImpl*>(
+          tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
+      auto status = cdc_service->TEST_GetTabletInfoFromCache({"" /* UUID */, stream_id, tablet_id});
+      if (status.ok()) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   void CheckRecord(
       const CDCSDKProtoRecordPB& record, CDCSDKYsqlTest::ExpectedRecord expected_records,
       uint32_t* count) {
@@ -802,6 +819,118 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       },
       MonoDelta::FromSeconds(120),
       "Getting Number of intents"));
+  }
+
+  Result<GetCDCDBStreamInfoResponsePB> GetDBStreamInfo(const CDCStreamId db_stream_id) {
+    GetCDCDBStreamInfoRequestPB get_req;
+    GetCDCDBStreamInfoResponsePB get_resp;
+    get_req.set_db_stream_id(db_stream_id);
+
+    RpcController get_rpc;
+    get_rpc.set_timeout(MonoDelta::FromMilliseconds(FLAGS_cdc_write_rpc_timeout_ms));
+    RETURN_NOT_OK(cdc_proxy_->GetCDCDBStreamInfo(get_req, &get_resp, &get_rpc));
+    return get_resp;
+  }
+
+  Status ChangeLeaderOfTablet(size_t new_leader_index, const TabletId tablet_id) {
+    string tool_path = GetToolPath("../bin", "yb-admin");
+    vector<string> argv;
+    argv.push_back(tool_path);
+    argv.push_back("-master_addresses");
+    argv.push_back(AsString(test_cluster_.mini_cluster_->mini_master(0)->bound_rpc_addr()));
+    argv.push_back("leader_stepdown");
+    argv.push_back(tablet_id);
+    argv.push_back(
+        test_cluster()->mini_tablet_server(new_leader_index)->server()->permanent_uuid());
+    RETURN_NOT_OK(Subprocess::Call(argv));
+
+    return Status::OK();
+  }
+
+  void GetTabletLeaderAndAnyFollowerIndex(
+      const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
+      size_t* leader_index, size_t* follower_index) {
+    for (auto replica : tablets[0].replicas()) {
+      for (size_t i = 0; i < test_cluster()->num_tablet_servers(); i++) {
+        if (test_cluster()->mini_tablet_server(i)->server()->permanent_uuid() ==
+            replica.ts_info().permanent_uuid()) {
+          if (replica.role() == PeerRole::LEADER) {
+            *leader_index = i;
+            LOG(INFO) << "Found leader index: " << i;
+          } else if (replica.role() == PeerRole::FOLLOWER) {
+            *follower_index = i;
+            LOG(INFO) << "Found follower index: " << i;
+          }
+        }
+      }
+    }
+  }
+  void CompareExpirationTime(
+      const TabletId& tablet_id, const CoarseTimePoint& prev_leader_expiry_time,
+      size_t current_leader_idx, bool strictly_greater_than = false) {
+    ASSERT_OK(WaitFor(
+        [&]() {
+          CoarseTimePoint current_expiry_time;
+          while (true) {
+            for (auto const& peer : test_cluster()->GetTabletPeers(current_leader_idx)) {
+              if (peer->tablet_id() == tablet_id) {
+                current_expiry_time = peer->cdc_sdk_min_checkpoint_op_id_expiration();
+                break;
+              }
+            }
+            if (strictly_greater_than) {
+              if (current_expiry_time > prev_leader_expiry_time) {
+                LOG(INFO) << "The expiration time for the current LEADER is: "
+                          << current_expiry_time.time_since_epoch().count()
+                          << ", and the previous LEADER expiration time should be: "
+                          << prev_leader_expiry_time.time_since_epoch().count();
+                return true;
+              }
+            } else {
+              if (current_expiry_time >= prev_leader_expiry_time) {
+                LOG(INFO) << "The expiration time for the current LEADER is: "
+                          << current_expiry_time.time_since_epoch().count()
+                          << ", and the previous LEADER expiration time should be: "
+                          << prev_leader_expiry_time.time_since_epoch().count();
+                return true;
+              }
+            }
+          }
+          return false;
+        },
+        MonoDelta::FromSeconds(60), "Waiting for active time to be updated"));
+  }
+
+  Result<int64_t> GetLastActiveTimeFromCdcStateTable(
+      const CDCStreamId& stream_id, const TabletId& tablet_id, client::YBClient* client) {
+    auto session = client->NewSession();
+    client::TableHandle table;
+    const client::YBTableName cdc_state_table(
+        YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
+    RETURN_NOT_OK(table.Open(cdc_state_table, client));
+
+    auto read_op = table.NewReadOp();
+    auto* read_req = read_op->mutable_request();
+    QLAddStringHashValue(read_req, tablet_id);
+    auto cond = read_req->mutable_where_expr()->mutable_condition();
+    cond->set_op(QLOperator::QL_OP_AND);
+    QLAddStringCondition(
+        cond, Schema::first_column_id() + master::kCdcStreamIdIdx, QL_OP_EQUAL, stream_id);
+    table.AddColumns({master::kCdcData}, read_req);
+    // TODO(async_flush): https://github.com/yugabyte/yugabyte-db/issues/12173
+    RETURN_NOT_OK(session->TEST_ReadSync(read_op));
+
+    auto row_block = ql::RowsResult(read_op.get()).GetRowBlock();
+    if (row_block->row_count() != 1) {
+      return STATUS(
+          InvalidArgument, "Did not find a row in the cdc_state table for the tablet and stream.");
+    }
+
+    const auto& last_active_time_string =
+        row_block->row(0).column(0).map_value().values().Get(0).string_value();
+
+    auto last_active_time = VERIFY_RESULT(CheckedStoInt<int64_t>(last_active_time_string));
+    return last_active_time;
   }
 };
 
@@ -1437,8 +1566,22 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeCDCStreamDelet
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
   DropTable(&test_cluster_, kTableName);
 
+  // Drop table will trigger the background thread to start the stream metadata cleanup, here
+  // test case wait for the metadata cleanup to finish by the background thread.
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        while (true) {
+          auto resp = GetDBStreamInfo(stream_id);
+          if (resp.ok() && resp->has_error()) {
+            return true;
+          }
+          continue;
+        }
+        return false;
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
   // Deleting the created DB Stream ID.
-  ASSERT_EQ(DeleteCDCStream(stream_id), true);
+  ASSERT_EQ(DeleteCDCStream(stream_id), false);
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeXClusterStreamDelete)) {
@@ -1458,17 +1601,26 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDropTableBeforeXClusterStream
   create_req.set_table_id(table_id);
   create_req.set_source_type(XCLUSTER);
   ASSERT_OK(cdc_proxy_->CreateCDCStream(create_req, &create_resp, &rpc));
+  // Drop table on YSQL tables deletes associated xCluster streams.
   DropTable(&test_cluster_, kTableName);
 
-  RpcController delete_rpc;
-  delete_rpc.set_timeout(MonoDelta::FromMilliseconds(FLAGS_cdc_write_rpc_timeout_ms));
+  // Wait for bg thread to cleanup entries from cdc_state.
+  client::TableHandle table_handle_cdc;
+  client::YBTableName cdc_state_table(
+      YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
+  ASSERT_OK(table_handle_cdc.Open(cdc_state_table, test_client()));
+  ASSERT_OK(WaitFor([&]() -> Result<bool> {
+    for (const auto& row : client::TableRange(table_handle_cdc)) {
+      auto stream_id = row.column(master::kCdcStreamIdIdx).string_value();
+      if (stream_id == create_resp.stream_id()) {
+        return false;
+      }
+    }
+    return true;
+  }, MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
 
-  DeleteCDCStreamRequestPB delete_req;
-  DeleteCDCStreamResponsePB delete_resp;
-  delete_req.add_stream_id(create_resp.stream_id());
-  // The following line assumes that cdc_proxy_ has been initialized in the test already
-  ASSERT_OK(cdc_proxy_->DeleteCDCStream(delete_req, &delete_resp, &delete_rpc));
-  ASSERT_EQ(!delete_resp.has_error(), true);
+  // This should fail now as the stream is deleted.
+  ASSERT_EQ(DeleteCDCStream(create_resp.stream_id()), false);
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCheckPointPersistencyNodeRestart)) {
@@ -2250,12 +2402,12 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentCountPersistencyRemoteB
   for (uint32_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
     if (i == leader_index_pre_shutdown) continue;
 
-    std::shared_ptr<tablet::TabletPeer> tablet_peer;
-    auto status =
-      test_cluster()->GetTabletManager(i)->GetTabletPeer(tablets[0].tablet_id(), &tablet_peer);
-    if (!status.IsOk()) {
+    auto tablet_peer_result = test_cluster()->GetTabletManager(i)->GetServingTablet(
+        tablets[0].tablet_id());
+    if (!tablet_peer_result.ok()) {
       continue;
     }
+    auto tablet_peer = std::move(*tablet_peer_result);
 
     OpId checkpoint = (*tablet_peer).cdc_sdk_min_checkpoint_op_id();
     LOG(INFO) << "Checkpoint OpId : " << checkpoint << " ,  on tserver index: " << i;
@@ -2797,6 +2949,751 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestSetCDCCheckpointWithHigherTse
   }
 }
 
+// Here creating a single table inside a namespace and a CDC stream on top of the namespace.
+// Deleting the table should clean every thing from master cache as well as the system
+// catalog.
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupAndDropTable)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version = */ nullptr));
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
+  ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
+
+  DropTable(&test_cluster_, kTableName);
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        while (true) {
+          auto get_resp = GetDBStreamInfo(stream_id);
+          // Wait until the background thread cleanup up the stream-id.
+          if (get_resp.ok() && get_resp->has_error() && get_resp->table_info_size() == 0) {
+            return true;
+          }
+        }
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
+}
+
+// Here we are creating multiple tables and a CDC stream on the same namespace.
+// Deleting multiple tables from the namespace should only clean metadata related to
+// deleted tables from master cache as well as system catalog.
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaDataCleanupMultiTableDrop)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+  const vector<string> table_list_suffix = {"_1", "_2", "_3"};
+  const int kNumTables = 3;
+  vector<YBTableName> table(kNumTables);
+  CDCStreamId stream_id;
+  int idx = 0;
+  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(kNumTables);
+
+  for (auto table_suffix : table_list_suffix) {
+    table[idx] = ASSERT_RESULT(CreateTable(
+        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true, table_suffix));
+    ASSERT_OK(test_client()->GetTablets(
+        table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
+    TableId table_id =
+        ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName + table_suffix));
+
+    ASSERT_OK(WriteEnumsRows(
+        0 /* start */, 100 /* end */, &test_cluster_, table_suffix, kNamespaceName, kTableName));
+    idx += 1;
+  }
+  stream_id = ASSERT_RESULT(CreateDBStream());
+
+  // Drop one of the table from the namespace, check stream associated with namespace should not
+  // be deleted, but metadata related to the droppped table should be cleaned up from the master.
+  for (int idx = 1; idx < kNumTables; idx++) {
+    char drop_table[64] = {0};
+    (void)snprintf(drop_table, sizeof(drop_table), "%s_%d", kTableName, idx);
+    DropTable(&test_cluster_, drop_table);
+  }
+
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        while (true) {
+          auto get_resp = GetDBStreamInfo(stream_id);
+          // Wait until the background thread cleanup up the drop table metadata.
+          if (get_resp.ok() && !get_resp->has_error() && get_resp->table_info_size() == 1) {
+            return true;
+          }
+        }
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
+
+  for (int idx = 0; idx < 2; idx++) {
+    auto change_resp = GetChangesFromCDC(stream_id, tablets[idx], nullptr);
+    // test_table_1 and test_table_2 GetChanges should retrun error where as test_table_3 should
+    // succeed.
+    if (idx == 0 || idx == 1) {
+      ASSERT_FALSE(change_resp.ok());
+
+    } else {
+      uint32_t record_size = (*change_resp).cdc_sdk_proto_records_size();
+      ASSERT_GT(record_size, 100);
+    }
+  }
+
+  // Deleting the created stream.
+  ASSERT_TRUE(DeleteCDCStream(stream_id));
+
+  // GetChanges should retrun error, for all tables.
+  for (int idx = 0; idx < 2; idx++) {
+    auto change_resp = GetChangesFromCDC(stream_id, tablets[idx], nullptr);
+    ASSERT_FALSE(change_resp.ok());
+  }
+}
+
+// After delete stream, metadata related to stream should be deleted from the master cache as well
+// as system catalog.
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpAndDeleteStream)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version = */ nullptr));
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream());
+  ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
+
+  // Deleting the created DB Stream ID.
+  ASSERT_TRUE(DeleteCDCStream(stream_id));
+
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        while (true) {
+          auto get_resp = GetDBStreamInfo(stream_id);
+          // Wait until the background thread cleanup up the stream-id.
+          if (get_resp.ok() && get_resp->has_error() && get_resp->table_info_size() == 0) {
+            return true;
+          }
+        }
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
+}
+
+// Here we are creating a table test_table_1 and a CDC stream ex:- stream-id-1.
+// Now create another table test_table_2 and create another stream ex:- stream-id-2 on the same
+// namespace. stream-id-1 and stream-id-2 are now associated with test_table_1. drop test_table_1,
+// call GetDBStreamInfo on both stream-id, we should not get any information related to drop table.
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableAndDropTable)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+  const vector<string> table_list_suffix = {"_1", "_2"};
+  vector<YBTableName> table(2);
+  vector<CDCStreamId> stream_id(2);
+  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(2);
+
+  for (int idx = 0; idx < 2; idx++) {
+    table[idx] = ASSERT_RESULT(CreateTable(
+        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true,
+        table_list_suffix[idx]));
+    ASSERT_OK(test_client()->GetTablets(
+        table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
+    TableId table_id = ASSERT_RESULT(
+        GetTableId(&test_cluster_, kNamespaceName, kTableName + table_list_suffix[idx]));
+
+    stream_id[idx] = ASSERT_RESULT(CreateDBStream());
+    ASSERT_OK(WriteEnumsRows(
+        0 /* start */, 100 /* end */, &test_cluster_, table_list_suffix[idx], kNamespaceName,
+        kTableName));
+  }
+
+  // Drop table test_table_1 which is associated with both streams.
+  for (int idx = 1; idx < 2; idx++) {
+    char drop_table[64] = {0};
+    (void)snprintf(drop_table, sizeof(drop_table), "%s_%d", kTableName, idx);
+    DropTable(&test_cluster_, drop_table);
+  }
+
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        int idx = 1;
+        while (idx <= 2) {
+          auto get_resp = GetDBStreamInfo(stream_id[idx -1]);
+          if (!get_resp.ok()) {
+            return false;
+          }
+          // stream-1 is associated with a single table, so as part of table drop, stream-1 should
+          // be cleaned and wait until the background thread is done with cleanup.
+          if (idx == 1 && false == get_resp->has_error() && get_resp->table_info_size() > 0) {
+            continue;
+          }
+          // stream-2 is associated with both tables, so dropping one table, should not clean the
+          // stream from cache as well as from system catalog, except the dropped table metadata.
+          if (idx > 1 && get_resp->table_info_size() > 1) {
+            continue;
+          }
+          idx += 1;
+        }
+        return true;
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestMultiStreamOnSameTableAndDeleteStream)) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+  const vector<string> table_list_suffix = {"_1", "_2"};
+  vector<YBTableName> table(2);
+  vector<CDCStreamId> stream_id(2);
+  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(2);
+
+  for (int idx = 0; idx < 2; idx++) {
+    table[idx] = ASSERT_RESULT(CreateTable(
+        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true,
+        table_list_suffix[idx]));
+    ASSERT_OK(test_client()->GetTablets(
+        table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
+    TableId table_id = ASSERT_RESULT(
+        GetTableId(&test_cluster_, kNamespaceName, kTableName + table_list_suffix[idx]));
+
+    stream_id[idx] = ASSERT_RESULT(CreateDBStream());
+    ASSERT_OK(WriteEnumsRows(
+        0 /* start */, 100 /* end */, &test_cluster_, table_list_suffix[idx], kNamespaceName,
+        kTableName));
+  }
+
+  // Deleting the stream-2 associated with both tables
+  ASSERT_TRUE(DeleteCDCStream(stream_id[1]));
+
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        int idx = 1;
+        while (idx <= 2) {
+          auto get_resp = GetDBStreamInfo(stream_id[idx - 1]);
+          if (!get_resp.ok()) {
+            return false;
+          }
+          // stream-1 which is not deleted, so there should not be any cleanup
+          // for it.
+          if (idx == 1 && get_resp->table_info_size() != 1) {
+            continue;
+          }
+          // stream-2 is deleted, so its metadata from the master cache as well as from the system
+          // catalog should be cleaned and wait until the background thread is done with the
+          // cleanup.
+          if (idx > 1 && (false == get_resp->has_error() || get_resp->table_info_size() != 0)) {
+            continue;
+          }
+          idx += 1;
+        }
+        return true;
+      },
+      MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCreateStreamAfterSetCheckpointMax)) {
+  FLAGS_update_min_cdc_indices_interval_secs = 1;
+  // We want to force every GetChanges to update the cdc_state table.
+  FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
+
+  ASSERT_OK(SetUpWithParams(1, 1, false));
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  auto resp =
+      ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
+  LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
+
+  // Forcefully update the checkpoint of the stream as MAX.
+  OpId commit_op_id = OpId::Max();
+  client::TableHandle cdc_state;
+  client::YBTableName cdc_state_table(
+      YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
+  ASSERT_OK(cdc_state.Open(cdc_state_table, test_client()));
+  const auto op = cdc_state.NewUpdateOp();
+  auto* const req = op->mutable_request();
+  QLAddStringHashValue(req, tablets[0].tablet_id());
+  QLAddStringRangeValue(req, stream_id);
+  cdc_state.AddStringColumnValue(req, master::kCdcCheckpoint, commit_op_id.ToString());
+  auto* condition = req->mutable_if_expr()->mutable_condition();
+  condition->set_op(QL_OP_EXISTS);
+  auto session = test_client()->NewSession();
+  EXPECT_OK(session->TEST_ApplyAndFlush(op));
+
+  // Now Read the cdc_state table check checkpoint is updated to MAX.
+  const auto read_op = cdc_state.NewReadOp();
+  auto* const req_read = read_op->mutable_request();
+  QLAddStringHashValue(req_read, tablets[0].tablet_id());
+  auto req_cond = req->mutable_where_expr()->mutable_condition();
+  req_cond->set_op(QLOperator::QL_OP_AND);
+  QLAddStringCondition(
+      req_cond, Schema::first_column_id() + master::kCdcStreamIdIdx, QL_OP_EQUAL, stream_id);
+  cdc_state.AddColumns({master::kCdcCheckpoint}, req_read);
+
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        EXPECT_OK(session->TEST_ApplyAndFlush(read_op));
+        auto row_block = ql::RowsResult(read_op.get()).GetRowBlock();
+        if (row_block->row_count() == 1 &&
+            row_block->row(0).column(0).string_value() == OpId::Max().ToString()) {
+          return true;
+        }
+        return false;
+      },
+      MonoDelta::FromSeconds(60),
+      "Failed to read from cdc_state table."));
+  VerifyCdcStateMatches(
+      test_client(), stream_id, tablets[0].tablet_id(), commit_op_id.term, commit_op_id.index);
+
+  CDCStreamId stream_id_2 = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id_2, tablets));
+  ASSERT_FALSE(resp.has_error());
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange)) {
+  FLAGS_update_min_cdc_indices_interval_secs = 1;
+  FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
+  FLAGS_cdc_intent_retention_ms = 10000;
+  // FLAGS_cdc_intent_retention_ms = 1000;
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  EnableCDCServiceInAllTserver(3);
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
+  LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
+
+  int cache_hit_tservers =
+      FindTserversWithCacheHit(stream_id, tablets[0].tablet_id(), num_tservers);
+  ASSERT_GE(cache_hit_tservers, 1);
+
+  // change LEADER of the tablet to tserver-2
+  ASSERT_OK(ChangeLeaderOfTablet(1, tablets[0].tablet_id()));
+
+  // check the condition of cache after LEADER step down.
+  // we will see prev as well as current LEADER cache, search stream exist.
+  cache_hit_tservers = FindTserversWithCacheHit(stream_id, tablets[0].tablet_id(), num_tservers);
+  ASSERT_GE(cache_hit_tservers, 1);
+
+  // Keep refreshing the stream from the new LEADER, till we cross the
+  // FLAGS_cdc_intent_retention_ms.
+  int idx = 0;
+  while (idx < 10) {
+    auto result =
+        ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+    idx += 1;
+    SleepFor(MonoDelta::FromMilliseconds(100));
+  }
+
+  // change LEADER of the tablet to tserver-1
+  ASSERT_OK(ChangeLeaderOfTablet(0, tablets[0].tablet_id()));
+
+  auto result = GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint());
+  ASSERT_OK(result);
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderReElect)) {
+  FLAGS_update_min_cdc_indices_interval_secs = 1;
+  FLAGS_update_metrics_interval_ms = 1000;
+  FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
+  LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
+  SleepFor(MonoDelta::FromSeconds(1));
+  size_t first_leader_index = 0;
+  size_t first_follower_index = 0;
+  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
+
+  GetChangesResponsePB change_resp_1 = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  LOG(INFO) << "Number of records after first transaction: " << change_resp_1.records().size();
+
+  ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+
+  size_t second_leader_index = -1;
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets2;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets2, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  for (auto replica : tablets2[0].replicas()) {
+    if (replica.role() == PeerRole::LEADER) {
+      for (size_t i = 0; i < test_cluster()->num_tablet_servers(); i++) {
+        if (test_cluster()->mini_tablet_server(i)->server()->permanent_uuid() ==
+            replica.ts_info().permanent_uuid()) {
+          second_leader_index = i;
+          LOG(INFO) << "Found second leader index: " << i;
+          break;
+        }
+      }
+    }
+  }
+
+  // Insert some records in transaction after first leader stepdown.
+  ASSERT_OK(WriteRowsHelper(100 /* start */, 200 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  // Call GetChanges so that the last active time is updated on the new leader.
+  auto result = GetChangesFromCDC(stream_id, tablets2, &change_resp.cdc_sdk_checkpoint());
+
+  SleepFor(MonoDelta::FromSeconds(2));
+  CoarseTimePoint correct_expiry_time;
+  for (auto const& peer : test_cluster()->GetTabletPeers(second_leader_index)) {
+    if (peer->tablet_id() == tablets2[0].tablet_id()) {
+      correct_expiry_time = peer->cdc_sdk_min_checkpoint_op_id_expiration();
+      break;
+    }
+  }
+  LOG(INFO) << "The correct expiry time after the final GetChanges call: "
+            << correct_expiry_time.time_since_epoch().count();
+
+  // we need to ensure the initial leader get's back leadership
+  ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+  LOG(INFO) << "Changed leadership back to the first leader TServer";
+
+  // Call the test RPC to get last active time of the current leader (original), and it should
+  // be lower than the previously recorded last_active_time.
+  CompareExpirationTime(tablets2[0].tablet_id(), correct_expiry_time, first_leader_index);
+  LOG(INFO) << "Succesfully compared expiry times";
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)) {
+  FLAGS_update_min_cdc_indices_interval_secs = 1;
+  FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  // RF: 3, num of tservers: 4.
+  for (int i = 0; i < 1; ++i) {
+    ASSERT_OK(test_cluster()->AddTabletServer());
+    ASSERT_OK(test_cluster()->WaitForAllTabletServers());
+    LOG(INFO) << "Added new TServer to test cluster";
+  }
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  size_t first_leader_index = 0;
+  size_t first_follower_index = 0;
+  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
+  LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
+  SleepFor(MonoDelta::FromSeconds(10));
+
+  ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+
+  // Shutdown tserver hosting tablet leader.
+  test_cluster()->mini_tablet_server(first_leader_index)->Shutdown();
+  LOG(INFO) << "TServer hosting tablet leader shutdown";
+  SleepFor(MonoDelta::FromSeconds(10));
+
+  size_t second_leader_index = -1;
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets2;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets2, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  for (auto replica : tablets2[0].replicas()) {
+    if (replica.role() == PeerRole::LEADER) {
+      for (size_t i = 0; i < test_cluster()->num_tablet_servers(); i++) {
+        if (i == first_leader_index) continue;
+        if (test_cluster()->mini_tablet_server(i)->server()->permanent_uuid() ==
+            replica.ts_info().permanent_uuid()) {
+          second_leader_index = i;
+          LOG(INFO) << "Found second leader index: " << i;
+          break;
+        }
+      }
+    }
+    if (replica.role() == PeerRole::FOLLOWER) {
+      for (size_t i = 0; i < test_cluster()->num_tablet_servers(); i++) {
+        if (i == first_leader_index) continue;
+        if (test_cluster()->mini_tablet_server(i)->server()->permanent_uuid() ==
+            replica.ts_info().permanent_uuid()) {
+          LOG(INFO) << "Found second follower index: " << i;
+          break;
+        }
+      }
+    }
+  }
+
+  // restart the initial leader tserver
+  ASSERT_OK(test_cluster()->mini_tablet_server(first_leader_index)->Start());
+  ASSERT_OK(test_cluster()->mini_tablet_server(first_leader_index)->WaitStarted());
+
+  // Insert some records in transaction after leader shutdown.
+  ASSERT_OK(WriteRowsHelper(100 /* start */, 200 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  // Call GetChanges so that the last active time is updated on the new leader.
+  GetChangesResponsePB prev_change_resp = change_resp;
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets2, &prev_change_resp.cdc_sdk_checkpoint()));
+  record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
+
+  SleepFor(MonoDelta::FromSeconds(2));
+  CoarseTimePoint correct_expiry_time;
+  for (auto const& peer : test_cluster()->GetTabletPeers(second_leader_index)) {
+    if (peer->tablet_id() == tablets2[0].tablet_id()) {
+      correct_expiry_time = peer->cdc_sdk_min_checkpoint_op_id_expiration();
+    }
+  }
+  LOG(INFO) << "CDKSDK checkpoint expiration time with LEADER tserver:"
+            << second_leader_index << " : "
+            << correct_expiry_time.time_since_epoch().count();
+
+  // We need to ensure the initial leader get's back leadership.
+  ASSERT_OK(ChangeLeaderOfTablet(first_leader_index, tablets[0].tablet_id()));
+
+  ASSERT_OK(WriteRowsHelper(200 /* start */, 300 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  // Call GetChanges so that the last active time is updated on the new leader.
+  prev_change_resp = change_resp;
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets2, &prev_change_resp.cdc_sdk_checkpoint()));
+  record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
+
+  // Call the test RPC to get last active time of the current leader (original), and it will
+  // be lower than the previously recorded last_active_time.
+  CompareExpirationTime(tablets2[0].tablet_id(), correct_expiry_time, first_leader_index);
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKActiveTimeCacheInSyncWithCDCStateTable)) {
+  FLAGS_update_min_cdc_indices_interval_secs = 1;
+  FLAGS_update_metrics_interval_ms = 1000;
+  FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
+  LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
+
+  size_t first_leader_index = -1;
+  size_t first_follower_index = -1;
+  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
+
+  GetChangesResponsePB change_resp_1 =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  LOG(INFO) << "Number of records after first transaction: " << change_resp_1.records().size();
+
+  const auto& first_leader_tserver =
+      test_cluster()->mini_tablet_server(first_leader_index)->server();
+  auto cdc_service = dynamic_cast<CDCServiceImpl*>(first_leader_tserver->rpc_server()
+                                                       ->TEST_service_pool("yb.cdc.CDCService")
+                                                       ->TEST_get_service()
+                                                       .get());
+  auto tablet_info = ASSERT_RESULT(
+      cdc_service->TEST_GetTabletInfoFromCache({"", stream_id, tablets[0].tablet_id()}));
+  auto first_last_active_time = tablet_info.last_active_time;
+  auto last_active_time_from_table = ASSERT_RESULT(
+      GetLastActiveTimeFromCdcStateTable(stream_id, tablets[0].tablet_id(), test_client()));
+  // Now check the active time in CDCSTate table, it should be greater than or equal to the
+  // last_active_time from the cache.
+  ASSERT_GE(last_active_time_from_table, first_last_active_time);
+  LOG(INFO) << "The active time is equal in both the cache and cdc_state table";
+
+  const size_t& second_leader_index = first_follower_index;
+  ASSERT_OK(ChangeLeaderOfTablet(second_leader_index, tablets[0].tablet_id()));
+
+  // Insert some records in transaction after first leader stepdown.
+  ASSERT_OK(WriteRowsHelper(100 /* start */, 200 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  // Call GetChanges so that the last active time is updated on the new leader.
+  auto result = GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint());
+
+  const auto& second_leader_tserver =
+      test_cluster()->mini_tablet_server(second_leader_index)->server();
+  cdc_service = dynamic_cast<CDCServiceImpl*>(second_leader_tserver->rpc_server()
+                                                  ->TEST_service_pool("yb.cdc.CDCService")
+                                                  ->TEST_get_service()
+                                                  .get());
+  tablet_info = ASSERT_RESULT(
+      cdc_service->TEST_GetTabletInfoFromCache({"", stream_id, tablets[0].tablet_id()}));
+  auto second_last_active_time = tablet_info.last_active_time;
+
+  last_active_time_from_table = ASSERT_RESULT(
+      GetLastActiveTimeFromCdcStateTable(stream_id, tablets[0].tablet_id(), test_client()));
+  ASSERT_GE(last_active_time_from_table, second_last_active_time);
+  LOG(INFO) << "The active time is equal in both the cache and cdc_state table";
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWhenAFollowerIsUnavailable)) {
+  FLAGS_update_min_cdc_indices_interval_secs = 1;
+  FLAGS_update_metrics_interval_ms = 500;
+  FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
+  const int num_tservers = 5;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  size_t first_leader_index = 0;
+  size_t first_follower_index = 0;
+  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
+
+  SleepFor(MonoDelta::FromSeconds(2));
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
+  LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
+  SleepFor(MonoDelta::FromSeconds(10));
+
+  // Insert some records in transaction after leader shutdown.
+  ASSERT_OK(WriteRowsHelper(100 /* start */, 200 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  auto result = GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint());
+
+  CoarseTimePoint first_expiry_time;
+  for (auto const& peer : test_cluster()->GetTabletPeers(first_leader_index)) {
+    if (peer->tablet_id() == tablets[0].tablet_id()) {
+      first_expiry_time = peer->cdc_sdk_min_checkpoint_op_id_expiration();
+    }
+  }
+  LOG(INFO) << "The expiry time after the first GetChanges call: "
+            << first_expiry_time.time_since_epoch().count();
+
+  // Shutdown tserver having tablet FOLLOWER.
+  test_cluster()->mini_tablet_server(first_follower_index)->Shutdown();
+  LOG(INFO) << "TServer hosting tablet follower shutdown";
+  // Call GetChanges so that the last active time is updated on the new leader.
+  result = GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint());
+
+  // Call the test RPC to get last active time of the current leader (original), and it must
+  // be greater than or equal to the previously recorded last_active_time.
+  CompareExpirationTime(tablets[0].tablet_id(), first_expiry_time, first_leader_index, true);
+}
+
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKLagMetrics)) {
   FLAGS_update_metrics_interval_ms = 1;
   ASSERT_OK(SetUpWithParams(1, 1, false));
@@ -2810,7 +3707,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKLagMetrics)) {
   TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
   vector<CDCStreamId> stream_id(2);
   for (int idx = 0; idx < 2; idx++) {
-    stream_id[idx]= ASSERT_RESULT(CreateDBStream(IMPLICIT));
+    stream_id[idx] = ASSERT_RESULT(CreateDBStream(IMPLICIT));
   }
 
   auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id[0], tablets));
@@ -2822,7 +3719,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKLagMetrics)) {
 
   ASSERT_OK(WaitFor(
       [&]() { return cdc_service->CDCEnabled(); }, MonoDelta::FromSeconds(30), "IsCDCEnabled"));
-  // Check without GetChanges cdcsdk_sent_lag_micros and
+  // Check without GetChanges async_cdcsdk_sent_lag_micros and
   // async_replication_committed_lag_micros should be greater than zero.
   ASSERT_OK(WaitFor(
       [&]() -> Result<bool> {

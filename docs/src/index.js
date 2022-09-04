@@ -2,6 +2,29 @@ import Clipboard from 'clipboard';
 
 const $ = window.jQuery;
 
+/**
+ * Whether the element is in view port or not.
+ *
+ * @param {*} el Element that needs to check.
+ *
+ * @returns boolean
+ */
+function yugabyteIsElementInViewport(el) {
+  // Special bonus for those using jQuery.
+  if (typeof $ === 'function' && el instanceof $) {
+    el = el[0];
+  }
+
+  const rect = el.getBoundingClientRect();
+
+  return (
+    rect.top >= 0 &&
+    rect.left >= 0 &&
+    rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+    rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+  );
+}
+
 function yugabyteResizeHeaderMenu() {
   $(document).on('click', '.mobile-menu,.open #controls-header-menu', () => {
     $('.page-header').toggleClass('open');
@@ -282,12 +305,25 @@ $(document).ready(() => {
       window.location.href = `/search/?q=${searchValue}`;
     }
   });
+
+  if (!yugabyteIsElementInViewport($(`.left-sidebar-wrap nav > ul.list a.current`))) {
+    const sidebarInnerHeight = $('aside.td-sidebar .left-sidebar-wrap-inner').height();
+    const currentTop = $('aside.td-sidebar a.current').offset().top;
+    $('aside.td-sidebar nav').scrollTop(currentTop - sidebarInnerHeight);
+  }
 });
 
 $(window).scroll(() => {
   // Right sidebar inpage link active on scroll.
   if ($('.td-toc #TableOfContents').length > 0) {
-    $('.td-content > h2,.td-content > h3,.td-content > h4').each((index, element) => {
+    let rightMenuSelector = '.td-content > h2,.td-content > h3,.td-content > h4';
+    if ($('.td-toc').hasClass('hide-h3')) {
+      rightMenuSelector = '.td-content > h2';
+    } else if ($('.td-toc').hasClass('hide-h4')) {
+      rightMenuSelector = '.td-content > h2,.td-content > h3';
+    }
+
+    $(rightMenuSelector).each((index, element) => {
       const offsetTop = $(element).offset().top;
       const scrollTop = $(window).scrollTop();
       const headingId = $(element).attr('id');

@@ -23,6 +23,8 @@ import static org.yb.AssertionWrappers.fail;
 import static org.yb.util.BuildTypeUtil.isASAN;
 import static org.yb.util.BuildTypeUtil.isTSAN;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.io.File;
 import java.net.InetSocketAddress;
 import java.net.URL;
@@ -1268,7 +1270,7 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
     return rows;
   }
 
-  protected Row getSingleRow(ResultSet rs) throws SQLException {
+  protected static Row getSingleRow(ResultSet rs) throws SQLException {
     assertTrue("Result set has no rows", rs.next());
     Row row = Row.fromResultSet(rs);
     assertFalse("Result set has more than one row", rs.next());
@@ -1306,7 +1308,7 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
     }
   }
 
-  protected Row getSingleRow(Statement stmt, String query) throws SQLException {
+  protected static Row getSingleRow(Statement stmt, String query) throws SQLException {
     try (ResultSet rs = stmt.executeQuery(query)) {
       return getSingleRow(rs);
     }
@@ -1474,6 +1476,12 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
   protected boolean isIndexOnlyScan(Statement stmt, String query, String index)
       throws SQLException {
     return doesQueryPlanContainsSubstring(stmt, query, "Index Only Scan using " + index);
+  }
+
+  /** Whether or not this select query uses Seq Scan. */
+  protected boolean isSeqScan(Statement stmt, String query)
+      throws SQLException {
+    return doesQueryPlanContainsSubstring(stmt, query, "Seq Scan on");
   }
 
   /**
@@ -1689,6 +1697,33 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
         fail(String.format("Unexpected Error Message. Got: '%s', Expected to contain: '%s'",
                            e.getMessage(), errorSubstring));
       }
+    }
+  }
+
+  /**
+   * @param statement The statement used to execute the query.
+   * @param query The query string.
+   * @param errorSubstrings An array of (case-insensitive) substrings of the
+   * expected error messages.
+   */
+  protected void runInvalidQuery(Statement statement, String query, String[] errorSubstrings) {
+    try {
+      statement.execute(query);
+      fail(String.format("Statement did not fail: %s", query));
+    } catch (SQLException e) {
+      for (String errorSubstring : errorSubstrings) {
+        if (StringUtils.containsIgnoreCase(e.getMessage(), errorSubstring)) {
+          LOG.info("Expected exception", e);
+          return;
+        }
+      }
+      String faillMessage = "Unexpected Error Message. Got: '" + e.getMessage() +
+          "', Expected to contain one of the error messages: ";
+      for (int i = 0; i < errorSubstrings.length-1; i++) {
+        faillMessage.concat("'").concat(errorSubstrings[i]).concat("', ");
+      }
+      faillMessage.concat("'").concat(errorSubstrings[errorSubstrings.length-1]).concat("'.");
+      fail(faillMessage);
     }
   }
 
@@ -2033,6 +2068,26 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
     }
   }
 
+  protected String [] getDocdbRequests(Statement stmt, String query) throws Exception {
+    // Executing query once just in case if master catalog cache is not refreshed
+    stmt.execute(query);
+
+    final ByteArrayOutputStream docDbReq = new ByteArrayOutputStream();
+    final PrintStream origOut = System.out; // saving original print console to restore it
+    origOut.flush();
+    System.setOut(new PrintStream(docDbReq, true/*autoFlush*/));
+    stmt.execute("SET yb_debug_log_docdb_requests = true");
+    stmt.execute(query);
+    stmt.execute("SET yb_debug_log_docdb_requests = false");
+    System.setOut(origOut);
+    String[] docDbReqStrArray = docDbReq.toString().split(System.getProperty("line.separator"));
+    return docDbReqStrArray;
+  }
+
+  protected int getNumDocdbRequests(Statement stmt, String query) throws Exception{
+    return getDocdbRequests(stmt, query).length;
+  }
+
   protected int spawnTServerWithFlags(Map<String, String> additionalFlags) throws Exception {
     Map<String, String> tserverFlags = getTServerFlags();
     tserverFlags.putAll(additionalFlags);
@@ -2080,6 +2135,16 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
                "-force",
                flag,
                value);
+  }
+
+  /*
+   * A helper method to get the current RSS memory (in kilobytes) for a PID.
+   */
+  protected static long getRssForPid(int pid) throws Exception {
+    Process process = Runtime.getRuntime().exec(String.format("ps -p %d -o rss=", pid));
+    try (Scanner scanner = new Scanner(process.getInputStream())) {
+      return scanner.nextLong();
+    }
   }
 
   public static class ConnectionBuilder implements Cloneable {
