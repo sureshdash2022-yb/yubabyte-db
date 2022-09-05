@@ -247,6 +247,40 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
   return GetTable(cluster, namespace_name, table_name + enum_suffix);
 }
 
+Result<YBTableName> CDCSDKTestBase::AlterTable(
+    Cluster* cluster,
+    const std::string& namespace_name,
+    const std::string& table_name,
+    const uint32_t num_tablets,
+    const bool add_primary_key,
+    bool colocated,
+    const int table_oid,
+    const bool enum_value,
+    const std::string& enum_suffix,
+    const std::string& schema_name) {
+  auto conn = VERIFY_RESULT(cluster->ConnectToDB(namespace_name));
+
+  /*if (enum_value) {
+    if (schema_name != "public") {
+      RETURN_NOT_OK(conn.ExecuteFormat("create schema $0;", schema_name));
+    }
+    RETURN_NOT_OK(conn.ExecuteFormat(
+        "CREATE TYPE $0.coupon_discount_type$1 AS ENUM ('FIXED$2','PERCENTAGE$3');", schema_name,
+        enum_suffix, enum_suffix, enum_suffix));
+  }*/
+
+  std::string table_oid_string = "";
+  if (table_oid > 0) {
+    // Need to turn on session flag to allow for CREATE WITH table_oid.
+    RETURN_NOT_OK(conn.Execute("set yb_enable_create_with_table_oid=true"));
+    table_oid_string = Format("table_oid = $0,", table_oid);
+  }
+  RETURN_NOT_OK(conn.ExecuteFormat(
+      "ALTER TABLE $0.$1 ADD COLUMN value_col_2 int",
+      schema_name, table_name + enum_suffix));
+  return GetTable(cluster, namespace_name, table_name + enum_suffix);
+}
+
 Result<std::string> CDCSDKTestBase::GetNamespaceId(const std::string& namespace_name) {
   master::GetNamespaceInfoResponsePB namespace_info_resp;
 
