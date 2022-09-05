@@ -1450,7 +1450,8 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
         resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
   }
   // Update relevant GetChanges metrics before handing off the Response.
-  UpdateCDCTabletMetrics(resp, producer_tablet, tablet_peer, op_id, record.source_type, last_readable_index);
+  UpdateCDCTabletMetrics(
+      resp, producer_tablet, tablet_peer, op_id, record.source_type, last_readable_index);
   context.RespondSuccess();
 }
 
