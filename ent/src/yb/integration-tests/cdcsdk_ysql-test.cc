@@ -3908,15 +3908,17 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKIntentDbSizeMetric)) {
       CreateCDCMetricsEntity::kFalse);
   uint64_t current_intentdb_size_bytes = metrics->cdcsdk_intentdb_size_bytes->value();
   LOG(INFO) << "IntentDB size in bytes after GetChanges call: " << current_intentdb_size_bytes;
-  GetChangesResponsePB new_change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  GetChangesResponsePB new_change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
   record_size = new_change_resp.cdc_sdk_proto_records_size();
 
-  ASSERT_OK(WaitFor([&]() -> Result<bool> {
-    auto metrics =
-        cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
-    LOG(INFO) << "current IntentDB size in bytes : "
-              << metrics->cdcsdk_intentdb_size_bytes->value();
-    return current_intentdb_size_bytes > metrics->cdcsdk_intentdb_size_bytes->value();
+  ASSERT_OK(WaitFor(
+      [&]() -> Result<bool> {
+        auto metrics =
+            cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
+        LOG(INFO) << "current IntentDB size in bytes : "
+                  << metrics->cdcsdk_intentdb_size_bytes->value();
+        return current_intentdb_size_bytes > metrics->cdcsdk_intentdb_size_bytes->value();
       },
       MonoDelta::FromSeconds(10) * kTimeMultiplier, "Wait for stream expiry time update."));
 }
