@@ -274,7 +274,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     ASSERT_OK(conn.ExecuteFormat("DROP TABLE $0", table_name));
   }
 
-  Status WriteRowsHelper(uint32_t start, uint32_t end, Cluster* cluster, bool flag, bool add_new_col = false) {
+  Status WriteRowsHelper(
+      uint32_t start, uint32_t end, Cluster* cluster, bool flag, bool add_new_col = false) {
     auto conn = VERIFY_RESULT(cluster->ConnectToDB(kNamespaceName));
     LOG(INFO) << "Writing " << end - start << " row(s) within transaction";
 
