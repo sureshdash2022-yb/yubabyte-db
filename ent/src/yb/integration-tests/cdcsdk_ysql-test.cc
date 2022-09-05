@@ -3733,8 +3733,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterSchemaWithExplictT
       /* is_compaction = */ false));
 
   auto table1 = ASSERT_RESULT(AlterTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
-  //ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
-  //ASSERT_EQ(tablets.size(), num_tablets);
+  // ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  // ASSERT_EQ(tablets.size(), num_tablets);
   ASSERT_OK(WriteRowsHelper(11 /* start */, 20 /* end */, &test_cluster_, true, true));
   ASSERT_OK(test_client()->FlushTables(
       {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
