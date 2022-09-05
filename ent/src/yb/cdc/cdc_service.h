@@ -161,11 +161,13 @@ class CDCServiceImpl : public CDCServiceIf {
       const ProducerTabletInfo& producer,
       std::shared_ptr<tablet::TabletPeer> tablet_peer);
 
-  void UpdateCDCTabletMetrics(const GetChangesResponsePB* resp,
-                              const ProducerTabletInfo& producer_tablet,
-                              const std::shared_ptr<tablet::TabletPeer>& tablet_peer,
-                              const OpId& op_id,
-                              int64_t last_readable_index);
+  void UpdateCDCTabletMetrics(
+      const GetChangesResponsePB* resp,
+      const ProducerTabletInfo& producer_tablet,
+      const std::shared_ptr<tablet::TabletPeer>& tablet_peer,
+      const OpId& op_id,
+      const CDCRequestSource source_type,
+      int64_t last_readable_index );
 
   std::shared_ptr<CDCServerMetrics> GetCDCServerMetrics() {
     return server_metrics_;

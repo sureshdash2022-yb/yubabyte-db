@@ -1450,7 +1450,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
         resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
   }
   // Update relevant GetChanges metrics before handing off the Response.
-  UpdateCDCTabletMetrics(resp, producer_tablet, tablet_peer, op_id, last_readable_index);
+  UpdateCDCTabletMetrics(resp, producer_tablet, tablet_peer, op_id, record.source_type, last_readable_index);
   context.RespondSuccess();
 }
 
@@ -1532,7 +1532,8 @@ void CDCServiceImpl::UpdateLagMetrics() {
   std::unordered_set<ProducerTabletInfo, ProducerTabletInfo::Hash> tablets_in_cdc_state_table;
   client::TableIteratorOptions options;
   options.columns = std::vector<string>{
-      master::kCdcTabletId, master::kCdcStreamId, master::kCdcLastReplicationTime};
+      master::kCdcTabletId, master::kCdcStreamId, master::kCdcLastReplicationTime,
+      master::kCdcData};
   bool failed = false;
   options.error_handler = [&failed](const Status& status) {
     YB_LOG_EVERY_N_SECS(WARNING, 30) << "Scan of table " << kCdcStateTableName.table_name()
@@ -1597,6 +1598,38 @@ void CDCServiceImpl::UpdateLagMetrics() {
             : last_getchanges_time;
         tablet_metric->time_since_last_getchanges->set_value(
             GetCurrentTimeMicros() - last_getchanges_time);
+      }
+
+      if (record.source_type == CDCSDK) {
+        // Update the expiry time of for the tablet_id and stream_id combination.
+        if (!row.column(3).IsNull()) {
+          auto active_time =
+              CheckedStoInt<int64_t>(row.column(3).map_value().values(0).string_value());
+          if (!active_time.ok()) {
+            tablet_metric->cdcsdk_expiry_time_ms->set_value(
+                GetAtomicFlag(&FLAGS_cdc_intent_retention_ms));
+          } else {
+            int64_t last_active_time = *active_time;
+            auto expiry_time =
+                last_active_time + 1000 * (GetAtomicFlag(&FLAGS_cdc_intent_retention_ms));
+            auto now = GetCurrentTimeMicros();
+            int64_t remaining_expiry_time = 0;
+            if (now < expiry_time) {
+              // Convert to milli seconds.
+              remaining_expiry_time = (expiry_time - now) / 1000;
+              tablet_metric->cdcsdk_expiry_time_ms->set_value(remaining_expiry_time);
+            } else {
+              tablet_metric->cdcsdk_expiry_time_ms->set_value(remaining_expiry_time);
+            }
+          }
+        }
+
+        auto intent_count = tablet_peer->tablet()->CountIntents();
+        if (intent_count.ok()) {
+          tablet_metric->cdcsdk_intentdb_size_bytes->set_value(*intent_count);
+        } else {
+          tablet_metric->cdcsdk_intentdb_size_bytes->set_value(0);
+        }
       }
     }
   }
@@ -3041,6 +3074,7 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
     const ProducerTabletInfo& producer_tablet,
     const std::shared_ptr<tablet::TabletPeer>& tablet_peer,
     const OpId& op_id,
+    const CDCRequestSource source_type,
     int64_t last_readable_index) {
   auto tablet_metric = GetCDCTabletMetrics(producer_tablet, tablet_peer);
   if (!tablet_metric) {
@@ -3053,6 +3087,22 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
   tablet_metric->last_readable_opid_index->set_value(last_readable_index);
   tablet_metric->last_checkpoint_opid_index->set_value(op_id.index);
   tablet_metric->last_getchanges_time->set_value(GetCurrentTimeMicros());
+
+  if (source_type == CDCSDK) {
+    if (resp->cdc_sdk_proto_records_size() > 0) {
+      tablet_metric->cdcsdk_traffic_sent->IncrementBy(
+          resp->cdc_sdk_proto_records_size() * resp->cdc_sdk_proto_records(0).ByteSize());
+    }
+    tablet_metric->cdcsdk_change_event_count->set_value(resp->cdc_sdk_proto_records_size());
+    tablet_metric->cdcsdk_expiry_time_ms->set_value(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms));
+    auto intent_count = tablet_peer->tablet()->CountIntents();
+    if (intent_count.ok()) {
+      tablet_metric->cdcsdk_intentdb_size_bytes->set_value(*intent_count);
+    } else {
+      tablet_metric->cdcsdk_intentdb_size_bytes->set_value(0);
+    }
+  }
+
   if (resp->records_size() > 0 || resp->cdc_sdk_proto_records_size() > 0) {
     uint64 last_record_time = resp->records_size() > 0
                                   ? resp->records(resp->records_size() - 1).time()
@@ -3070,14 +3120,6 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
     auto last_replicated_micros = GetLastReplicatedTime(tablet_peer);
     if (resp->cdc_sdk_proto_records_size() > 0) {
       tablet_metric->cdcsdk_sent_lag_micros->set_value(last_replicated_micros - last_record_micros);
-      tablet_metric->cdcsdk_traffic_sent->IncrementBy(
-          resp->cdc_sdk_proto_records_size() * resp->cdc_sdk_proto_records(0).ByteSize());
-      tablet_metric->cdcsdk_change_event_count->set_value(resp->cdc_sdk_proto_records_size());
-      // TODO: do in UpdateAndPeers Thread
-      tablet_metric->cdcsdk_expiry_time_ms->set_value(
-          GetAtomicFlag(&FLAGS_cdc_intent_retention_ms));
-      auto intent_count = tablet_peer->tablet()->CountIntents();
-
     } else {
       tablet_metric->async_replication_sent_lag_micros->set_value(
           last_replicated_micros - last_record_micros);
