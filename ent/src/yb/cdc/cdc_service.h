@@ -301,7 +301,7 @@ class CDCServiceImpl : public CDCServiceIf {
 
   // Update metrics async_replication_sent_lag_micros and async_replication_committed_lag_micros.
   // Called periodically default 1s.
-  void UpdateLagMetrics();
+  void UpdateCDCMetrics();
 
   // This method is used to read the cdc_state table to find the minimum replicated index for each
   // tablet and then update the peers' log objects. Also used to update lag metrics.
@@ -312,7 +312,7 @@ class CDCServiceImpl : public CDCServiceIf {
 
   MicrosTime GetLastReplicatedTime(const std::shared_ptr<tablet::TabletPeer>& tablet_peer);
 
-  bool ShouldUpdateLagMetrics(MonoTime time_since_update_metrics);
+  bool ShouldUpdateCDCMetrics(MonoTime time_since_update_metrics);
 
   Result<std::shared_ptr<client::TableHandle>> GetCdcStateTable() EXCLUDES(mutex_);
 

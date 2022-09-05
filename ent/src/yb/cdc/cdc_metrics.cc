@@ -75,12 +75,13 @@ METRIC_DEFINE_gauge_int64(cdc, async_replication_committed_lag_micros,
                           "Lag between last record applied on consumer and producer.",
                           {0, yb::AggregationFunction::kMax} /* optional_args */);
 METRIC_DEFINE_gauge_int64(cdc,
-    cdcsdk_sent_lag_micros, "CDCSDK Physical Time Lag Last Sent",
+    cdcsdk_sent_lag_micros, "CDCSDK sent Lag",
     yb::MetricUnit::kMicroseconds,
     "Lag between last committed record in the producer and last send record to user.",
     {0, yb::AggregationFunction::kMax} /* optional_args */);
-METRIC_DEFINE_gauge_int64(cdc,
-    cdcsdk_committed_lag_micros, "CDCSDK Physical Time Lag Last Committed",
+METRIC_DEFINE_gauge_int64(
+    cdc, cdcsdk_committed_lag_micros,
+    "CDCSDK committed Lag",
     yb::MetricUnit::kMicroseconds,
     "Lag between last committed record in the producer and first send record to user.",
     {0, yb::AggregationFunction::kMax} /* optional_args */);

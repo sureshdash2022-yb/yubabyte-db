@@ -1518,7 +1518,7 @@ void CDCServiceImpl::ComputeLagMetric(
   }
 }
 
-void CDCServiceImpl::UpdateLagMetrics() {
+void CDCServiceImpl::UpdateCDCMetrics() {
   auto tablet_checkpoints = impl_->TabletCheckpointsCopy();
 
   auto cdc_state_table_result = GetCdcStateTable();
@@ -1664,7 +1664,7 @@ void CDCServiceImpl::UpdateLagMetrics() {
   }
 }
 
-bool CDCServiceImpl::ShouldUpdateLagMetrics(MonoTime time_since_update_metrics) {
+bool CDCServiceImpl::ShouldUpdateCDCMetrics(MonoTime time_since_update_metrics) {
   // Only update metrics if cdc is enabled, which means we have a valid replication stream.
   return GetAtomicFlag(&FLAGS_enable_collect_cdc_metrics) &&
          (time_since_update_metrics == MonoTime::kUninitialized ||
@@ -2006,8 +2006,8 @@ void CDCServiceImpl::UpdatePeersAndMetrics() {
       continue;
     }
     // Should we update lag metrics default every 1s.
-    if (ShouldUpdateLagMetrics(time_since_update_metrics)) {
-      UpdateLagMetrics();
+    if (ShouldUpdateCDCMetrics(time_since_update_metrics)) {
+      UpdateCDCMetrics();
       time_since_update_metrics = MonoTime::Now();
     }
 
