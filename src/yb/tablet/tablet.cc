@@ -222,11 +222,6 @@ DEFINE_bool(tablet_enable_ttl_file_filter, false,
             "Enables compaction to directly delete files that have expired based on TTL, "
             "rather than removing them via the normal compaction process.");
 
-DEFINE_bool(enable_pessimistic_locking, false,
-            "If true, use pessimistic locking behavior in conflict resolution.");
-TAG_FLAG(enable_pessimistic_locking, evolving);
-TAG_FLAG(enable_pessimistic_locking, hidden);
-
 DEFINE_test_flag(int32, slowdown_backfill_by_ms, 0,
                  "If set > 0, slows down the backfill process by this amount.");
 
@@ -281,37 +276,19 @@ using namespace std::literals;  // NOLINT
 
 using rocksdb::WriteBatch;
 using rocksdb::SequenceNumber;
-using yb::tserver::WriteRequestPB;
-using yb::tserver::WriteResponsePB;
 using yb::docdb::KeyValueWriteBatchPB;
-using yb::tserver::ReadRequestPB;
-using yb::docdb::DocOperation;
-using yb::docdb::RedisWriteOperation;
-using yb::docdb::QLWriteOperation;
-using yb::docdb::PgsqlWriteOperation;
-using yb::docdb::DocDBCompactionFilterFactory;
-using yb::docdb::InitMarkerBehavior;
 
 namespace yb {
 namespace tablet {
 
-using consensus::MaximumOpId;
-using log::LogAnchorRegistry;
 using strings::Substitute;
-using base::subtle::Barrier_AtomicIncrement;
 
-using client::ChildTransactionData;
-using client::TransactionManager;
 using client::YBSession;
-using client::YBTransaction;
 using client::YBTablePtr;
 
 using docdb::DocKey;
-using docdb::DocPath;
 using docdb::DocRowwiseIterator;
-using docdb::DocWriteBatch;
 using docdb::SubDocKey;
-using docdb::PrimitiveValue;
 using docdb::StorageDbType;
 
 const std::hash<std::string> hash_for_data_root_dir;
@@ -464,9 +441,9 @@ Tablet::Tablet(const TabletInitData& data)
       (is_sys_catalog_ || transactional)) {
     transaction_participant_ = std::make_unique<TransactionParticipant>(
         data.transaction_participant_context, this, tablet_metrics_entity_);
-    if (ANNOTATE_UNPROTECTED_READ(FLAGS_enable_pessimistic_locking)) {
+    if (data.waiting_txn_registry) {
       wait_queue_ = std::make_unique<docdb::WaitQueue>(
-        transaction_participant_.get(), metadata_->fs_manager()->uuid());
+        transaction_participant_.get(), metadata_->fs_manager()->uuid(), data.waiting_txn_registry);
     }
   }
 
@@ -1582,8 +1559,7 @@ Result<bool> Tablet::HasScanReachedMaxPartitionKey(
     // For batched index lookup of ybctids, check if the current partition hash is lesser than
     // upper bound. If it is, we can then avoid paging. Paging of batched index lookup of ybctids
     // occur when tablets split after request is prepared.
-    if (pgsql_read_request.has_ybctid_column_value() &&
-        implicit_cast<size_t>(pgsql_read_request.batch_arguments_size()) > row_count) {
+    if (implicit_cast<size_t>(pgsql_read_request.batch_arguments_size()) > row_count) {
       if (!pgsql_read_request.upper_bound().has_key()) {
           return false;
       }

@@ -2,103 +2,123 @@
  * Copyright (c) YugaByte, Inc.
  */
 
-package main
+ package main
 
-import (
-    "fmt"
-    "os"
-)
+ import (
+     "fmt"
+     "os"
+     "strings"
+ )
 
-// Component 4: Nginx
-type Nginx struct {
-    Name               string
-    ConfFileLocation   string
-    Mode               string
-    ServerName         string
-    ServerKeyLocation  string
-    ServerCertLocation string
-}
+ // Component 4: Nginx
+ type Nginx struct {
+     Name               string
+     SystemdFileLocation string
+     ConfFileLocation   string
+     Mode               string
+     ServerName         string
 
-// Method of the Component
-// Interface are implemented by
-// the Nginx struct and customizable
-// for each specific service.
+ }
 
-func (ngi Nginx) SetUpPrereqs() {
-    arg1 := []string{"epel-release"}
-    YumInstall(arg1)
-    arg2 := []string{"nginx"}
-    YumInstall(arg2)
-}
+ // SetUpPrereqs performs the setup operations specific
+ // to Nginx.
+ func (ngi Nginx) SetUpPrereqs() {
+     arg1 := []string{"epel-release"}
+     YumInstall(arg1)
+     arg2 := []string{"nginx"}
+     YumInstall(arg2)
+ }
 
-func (ngi Nginx) Install() {
-    if ngi.Mode == "https" {
-        configureNginxConfHTTPS(ngi.ServerKeyLocation, ngi.ServerCertLocation,
-        ngi.ConfFileLocation)
+ // Install performs the installation procedures specific
+ // to Nginx.
+ func (ngi Nginx) Install() {
+     if ngi.Mode == "https" {
+         configureNginxConfHTTPS()
+     }
+ }
+
+ func disableSELinux() {
+    command0 := "sudo"
+    arg0 := []string{"setenforce", "0"}
+    ExecuteBashCommand(command0, arg0)
+ }
+
+ // Start performs the startup operations specific to Nginx.
+ func (ngi Nginx) Start() {
+     command1 := "systemctl"
+     arg1 := []string{"daemon-reload"}
+     ExecuteBashCommand(command1, arg1)
+
+     if strings.Contains(DetectOS(), "CentOS") {
+        disableSELinux()
     }
-    certTLSstorage()
-}
 
-func (ngi Nginx) Start() {
-    command1 := "systemctl"
-    arg1 := []string{"daemon-reload"}
-    ExecuteBashCommand(command1, arg1)
+     command2 := "systemctl"
+     arg2 := []string{"enable", "nginx"}
+     ExecuteBashCommand(command2, arg2)
 
-    command2 := "systemctl"
-    arg2 := []string{"start", "nginx"}
-    ExecuteBashCommand(command2, arg2)
+     command3 := "systemctl"
+     arg3 := []string{"start", "nginx"}
+     ExecuteBashCommand(command3, arg3)
 
-    command3 := "systemctl"
-    arg3 := []string{"status", "nginx"}
-    ExecuteBashCommand(command3, arg3)
-}
+     command4 := "systemctl"
+     arg4 := []string{"status", "nginx"}
+     ExecuteBashCommand(command4, arg4)
+ }
 
-func (ngi Nginx) Stop() {
-    command1 := "systemctl"
-    arg1 := []string{"stop", "nginx"}
-    ExecuteBashCommand(command1, arg1)
-}
+ // Stop performs the stop operations specific to Nginx.
+ func (ngi Nginx) Stop() {
 
-func (ngi Nginx) Restart() {
-    command1 := "systemctl"
-    arg1 := []string{"restart", "nginx"}
-    ExecuteBashCommand(command1, arg1)
-}
+     command1 := "systemctl"
+     arg1 := []string{"stop", "nginx"}
+     ExecuteBashCommand(command1, arg1)
+ }
 
-func (ngi Nginx) GetConfFileLocation() string {
-    return ngi.ConfFileLocation
-}
+ // Restart performs the restart operations specific to Nginx.
+ func (ngi Nginx) Restart() {
 
-// Per current cleanup.sh script.
-func (ngi Nginx) Uninstall() {
-    ngi.Stop()
-    os.RemoveAll("/opt/yugabyte")
-}
+    if strings.Contains(DetectOS(), "CentOS") {
+        disableSELinux()
+    }
+     command1 := "systemctl"
+     arg1 := []string{"restart", "nginx"}
+     ExecuteBashCommand(command1, arg1)
+ }
 
-func configureNginxConfHTTPS(server_cert_location string,
- server_key_location string, confFileLoc string) {
+ // GetConfFileLocation gets the location of the Nginx config
+ // file.
+ func (ngi Nginx) GetConfFileLocation() string {
+     return ngi.ConfFileLocation
+ }
+
+ // Uninstall performs the uninstallation procedures specific
+ // to Nginx (no data volumes to retain).
+ func (ngi Nginx) Uninstall() {
+     ngi.Stop()
+ }
+
+ func configureNginxConfHTTPS() {
+
+    generateCertGolang()
+
+    os.Chmod("key.pem", os.ModePerm)
+    os.Chmod("cert.pem", os.ModePerm)
 
     os.MkdirAll("/opt/yugabyte/certs", os.ModePerm)
     fmt.Println("/opt/yugabyte/certs directory successfully created.")
-    destination_tls := "/opt/yugabyte/certs"
-    CopyFileGolang(server_key_location, destination_tls)
-    CopyFileGolang(server_cert_location, destination_tls)
+
+    ExecuteBashCommand("bash", []string{"-c", "cp " + "key.pem" + " " + "/opt/yugabyte/certs"})
+    ExecuteBashCommand("bash", []string{"-c", "cp " + "cert.pem" + " " + "/opt/yugabyte/certs"})
 
     command1 := "chown"
-    arg1 := []string{"yugabyte:yugabyte", "/opt/yugabyte/certs/server.key"}
+    arg1 := []string{"yugabyte:yugabyte", "/opt/yugabyte/certs/key.pem"}
     ExecuteBashCommand(command1, arg1)
 
     command2 := "chown"
-    arg2 := []string{"yugabyte:yugabyte", "/opt/yugabyte/certs/server.crt"}
+    arg2 := []string{"yugabyte:yugabyte", "/opt/yugabyte/certs/cert.pem"}
     ExecuteBashCommand(command2, arg2)
-}
 
-func certTLSstorage() {
-
-    os.MkdirAll("/opt/yugaware", os.ModePerm)
-    fmt.Println("/opt/yugaware directory successfully created.")
-    command1 := "chown"
-    arg1 := []string{"yugabyte:yugabyte", "-R", "/opt/yugaware"}
-    ExecuteBashCommand(command1, arg1)
-
+    if strings.Contains(DetectOS(), "CentOS") {
+        disableSELinux()
+    }
 }

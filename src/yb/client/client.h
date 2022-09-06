@@ -533,13 +533,18 @@ class YBClient {
   Status UpdateCDCStream(const std::vector<CDCStreamId>& stream_ids,
                          const std::vector<master::SysCDCStreamEntryPB>& new_entries);
 
-  Result<bool> IsBootstrapRequired(const TableId& table_id,
+  Result<bool> IsBootstrapRequired(const std::vector<TableId>& table_ids,
                                    const boost::optional<CDCStreamId>& stream_id = boost::none);
 
   // Update consumer pollers after a producer side tablet split.
   Status UpdateConsumerOnProducerSplit(const string& producer_id,
                                                const TableId& table_id,
                                                const master::ProducerSplitTabletInfoPB& split_info);
+
+  // Update after a producer DDL change. Returns if caller should wait for a similar Consumer DDL.
+  Result<bool> UpdateConsumerOnProducerMetadata(const string& producer_id,
+                                                const TableId& table_id,
+                                                const tablet::ChangeMetadataRequestPB& meta_info);
 
   void GetTableLocations(
       const TableId& table_id, int32_t max_tablets, RequireTabletsRunning require_tablets_running,
@@ -571,7 +576,9 @@ class YBClient {
   // List tables in a namespace.
   //
   // 'tables' is appended to only on success.
-  Result<std::vector<YBTableName>> ListUserTables(const NamespaceId& ns_id = "");
+  Result<std::vector<YBTableName>> ListUserTables(
+      const master::NamespaceIdentifierPB& ns_identifier,
+      bool include_indexes = false);
 
   Result<std::unordered_map<uint32_t, string>> GetPgEnumOidLabelMap(const NamespaceName& ns_name);
 
@@ -718,6 +725,9 @@ class YBClient {
 
   // Check if placement information is satisfiable.
   Status ValidateReplicationInfo(const master::ReplicationInfoPB& replication_info);
+
+  // Get the disk size of a table (calculated as SST file size + WAL file size)
+  Result<TableSizeInfo> GetTableDiskSize(const TableId& table_id);
 
   Result<bool> CheckIfPitrActive();
 

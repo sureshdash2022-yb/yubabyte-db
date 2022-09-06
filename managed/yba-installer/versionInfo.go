@@ -5,11 +5,25 @@
  package main
 
  import (
-    "fmt"
+    "os"
+    "strings"
  )
 
- func Version() {
+// GetVersion gets the version at execution time so that yba-installer
+// installs the correct version of Yugabyte Anywhere.
+ func GetVersion() (string){
 
-    fmt.Println("You are on version 1 of Ybanystaller!")
+   cwd, _ := os.Getwd()
+   currentFolderPathList := strings.Split(cwd, "/")
+   lenFolder := len(currentFolderPathList)
+   currFolder := currentFolderPathList[lenFolder - 1]
 
- }
+   versionInformation := strings.Split(currFolder, "-")
+
+   versionNumber := versionInformation[1]
+   buildNumber := versionInformation[2]
+
+   version := versionNumber + "-" + buildNumber
+
+   return version
+}

@@ -25,12 +25,12 @@
  // for each specific service.
 
  func (prom Prometheus) SetUpPrereqs() {
-    moveAndExtractPrometheusPackage(prom.Version)
+    prom.moveAndExtractPrometheusPackage(prom.Version)
  }
 
  func (prom Prometheus) Install() {
     createPrometheusUser(prom.IsUpgrade)
-    createPrometheusSymlinks(prom.Version, prom.IsUpgrade)
+    prom.createPrometheusSymlinks(prom.Version, prom.IsUpgrade)
     setPermissionsPrometheusConfigFile(prom.IsUpgrade)
     restartIfUpgrade(prom.IsUpgrade)
  }
@@ -41,12 +41,16 @@
     ExecuteBashCommand(command1, arg1)
 
     command2 := "systemctl"
-    arg2 := []string{"start", "prometheus"}
+    arg2 := []string{"enable", "prometheus"}
     ExecuteBashCommand(command2, arg2)
 
     command3 := "systemctl"
-    arg3 := []string{"status", "prometheus"}
+    arg3 := []string{"start", "prometheus"}
     ExecuteBashCommand(command3, arg3)
+
+    command4 := "systemctl"
+    arg4 := []string{"status", "prometheus"}
+    ExecuteBashCommand(command4, arg4)
  }
 
  func (prom Prometheus) Stop() {
@@ -72,19 +76,18 @@
  //Per current cleanup.sh script.
  func (prom Prometheus) Uninstall() {
     prom.Stop()
-    os.RemoveAll("/opt/yugabyte")
+    RemoveAllExceptDataVolumes([]string{"prometheus"})
  }
 
  func (prom Prometheus) VersionInfo() string {
     return prom.Version
  }
 
- func moveAndExtractPrometheusPackage(ver string) {
+ func (prom Prometheus) moveAndExtractPrometheusPackage(ver string) {
 
     srcPath := "/opt/yugabyte/third-party/prometheus-" + ver + ".linux-amd64.tar.gz"
     dstPath := "/opt/yugabyte/packages/prometheus-" + ver + ".linux-amd64.tar.gz"
     CopyFileGolang(srcPath, dstPath)
-    os.Chdir("/opt/yugabyte/packages")
     rExtract, errExtract := os.Open(dstPath)
     if errExtract != nil {
         fmt.Println("Error in starting the File Extraction process")
@@ -94,7 +97,7 @@
     if _, err := os.Stat(path_package_extracted); err == nil {
         fmt.Println(path_package_extracted + " already exists, skipping re-extract.")
     } else {
-        ExtractTarGz(rExtract)
+        Untar(rExtract, "/opt/yugabyte/packages")
         fmt.Println(dstPath + " successfully extracted!")
     }
 
@@ -124,6 +127,9 @@
         os.MkdirAll("/var/lib/prometheus", os.ModePerm)
         fmt.Println("/var/lib/prometheus directory successfully created.")
 
+        //Make the swamper_targets directory for prometheus
+        os.MkdirAll("/opt/yugabyte/swamper_targets", os.ModePerm)
+
         command3 := "chown"
         arg3 := []string{"prometheus:prometheus", "/etc/prometheus"}
         ExecuteBashCommand(command3, arg3)
@@ -136,9 +142,7 @@
 
  }
 
- func createPrometheusSymlinks(ver string, isUpgrade bool) {
-
-    os.Chdir("/opt/yugabyte/packages")
+ func (prom Prometheus) createPrometheusSymlinks(ver string, isUpgrade bool) {
 
     command1 := "ln"
     path1a := "/opt/yugabyte/packages/prometheus-" + ver + ".linux-amd64/prometheus"
@@ -214,7 +218,7 @@
         arg8 := []string{"-R", "prometheus:prometheus", "/etc/prometheus/console_libraries"}
         ExecuteBashCommand(command8, arg8)
     }
- }
+}
 
  func setPermissionsPrometheusConfigFile(isUpgrade bool) {
 

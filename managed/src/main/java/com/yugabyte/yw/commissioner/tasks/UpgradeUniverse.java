@@ -1164,12 +1164,6 @@ public class UpgradeUniverse extends UniverseDefinitionTaskBase {
     getRunnableTask().addSubTaskGroup(subTaskGroup);
   }
 
-  private int getSleepTimeForProcess(ServerType processType) {
-    return processType == ServerType.MASTER
-        ? taskParams().sleepAfterMasterRestartMillis
-        : taskParams().sleepAfterTServerRestartMillis;
-  }
-
   private int getNodeToNodeChangeForToggleTls(UserIntent userIntent, UpgradeParams params) {
     return userIntent.enableNodeToNodeEncrypt != params.enableNodeToNodeEncrypt
         ? (params.enableNodeToNodeEncrypt ? 1 : -1)
@@ -1211,6 +1205,7 @@ public class UpgradeUniverse extends UniverseDefinitionTaskBase {
 
     // The software package to install for this cluster.
     params.ybSoftwareVersion = userIntent.ybSoftwareVersion;
+    params.ybcSoftwareVersion = taskParams().ybcSoftwareVersion;
     // Set the InstanceType
     params.instanceType = node.cloudInfo.instance_type;
     params.enableNodeToNodeEncrypt = userIntent.enableNodeToNodeEncrypt;
