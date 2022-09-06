@@ -250,21 +250,21 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   }
 
   // The range is exclusive of end i.e. [start, end)
-  Status WriteRows(uint32_t start, uint32_t end, Cluster* cluster, bool add_new_col = false) {
+  Status WriteRows(
+      uint32_t start, uint32_t end, Cluster* cluster, const string& optional_col_name = "") {
     auto conn = VERIFY_RESULT(cluster->ConnectToDB(kNamespaceName));
     LOG(INFO) << "Writing " << end - start << " row(s)";
 
     for (uint32_t i = start; i < end; ++i) {
-      if (add_new_col) {
+      if (!optional_col_name.empty()) {
         RETURN_NOT_OK(conn.ExecuteFormat(
             "INSERT INTO $0($1, $2, $3) VALUES ($4, $5, $6)", kTableName, kKeyColumnName,
-            kValueColumnName, "value_col_2", i, i + 1, i+1));
+            kValueColumnName, optional_col_name, i, i + 1, i + 1));
       } else {
         RETURN_NOT_OK(conn.ExecuteFormat(
             "INSERT INTO $0($1, $2) VALUES ($3, $4)", kTableName, kKeyColumnName, kValueColumnName,
             i, i + 1));
       }
-
     }
     return Status::OK();
   }
@@ -275,22 +275,22 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   }
 
   Status WriteRowsHelper(
-      uint32_t start, uint32_t end, Cluster* cluster, bool flag, bool add_new_col = false) {
+      uint32_t start, uint32_t end, Cluster* cluster, bool flag,
+      const string& optional_col_name = "") {
     auto conn = VERIFY_RESULT(cluster->ConnectToDB(kNamespaceName));
     LOG(INFO) << "Writing " << end - start << " row(s) within transaction";
 
     RETURN_NOT_OK(conn.Execute("BEGIN"));
     for (uint32_t i = start; i < end; ++i) {
-      if (add_new_col) {
+      if (!optional_col_name.empty()) {
         RETURN_NOT_OK(conn.ExecuteFormat(
             "INSERT INTO $0($1, $2, $3) VALUES ($4, $5, $6)", kTableName, kKeyColumnName,
-            kValueColumnName, "value_col_2", i, i + 1, i + 1));
+            kValueColumnName, optional_col_name, i, i + 1, i + 1));
       } else {
         RETURN_NOT_OK(conn.ExecuteFormat(
             "INSERT INTO $0($1, $2) VALUES ($3, $4)", kTableName, kKeyColumnName, kValueColumnName,
             i, i + 1));
       }
-
     }
     if (flag) {
       RETURN_NOT_OK(conn.Execute("COMMIT"));
@@ -3710,7 +3710,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWhenAFollowerIsUna
   CompareExpirationTime(tablets[0].tablet_id(), first_expiry_time, first_leader_index, true);
 }
 
-TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterSchemaWithExplictTransaction)) {
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAddColumnsWithExplictTransaction)) {
   const int num_tservers = 3;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
 
@@ -3733,10 +3733,10 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterSchemaWithExplictT
       {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
       /* is_compaction = */ false));
 
-  auto table1 = ASSERT_RESULT(AlterTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  table = ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
   // ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
   // ASSERT_EQ(tablets.size(), num_tablets);
-  ASSERT_OK(WriteRowsHelper(11 /* start */, 20 /* end */, &test_cluster_, true, true));
+  ASSERT_OK(WriteRowsHelper(11 /* start */, 20 /* end */, &test_cluster_, true, kValue2ColumnName));
   ASSERT_OK(test_client()->FlushTables(
       {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
       /* is_compaction = */ false));
@@ -3752,11 +3752,10 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterSchemaWithExplictT
     LOG(INFO) << "row: " << idx << " : " << s.str();
   }
   ASSERT_GE(record_size, 20);
-  LOG(INFO) << "Total records read by GetChanges call on stream_id_1 after alter table: "
-            << record_size;
+  LOG(INFO) << "Total records read by GetChanges call, after alter table: " << record_size;
 }
 
-TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterSchemaWithImplictTransaction)) {
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAddColumnsWithImplictTransaction)) {
   const int num_tservers = 3;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
 
@@ -3776,10 +3775,10 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterSchemaWithImplictT
   // Insert some records in transaction.
   ASSERT_OK(WriteRows(1 /* start */, 10 /* end */, &test_cluster_));
 
-  auto table1 = ASSERT_RESULT(AlterTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
-  // ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
-  // ASSERT_EQ(tablets.size(), num_tablets);
-  ASSERT_OK(WriteRows(11 /* start */, 20 /* end */, &test_cluster_, true));
+  table = ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+  ASSERT_OK(WriteRows(11 /* start */, 20 /* end */, &test_cluster_, kValue2ColumnName));
 
   GetChangesResponsePB change_resp;
   change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
@@ -3793,8 +3792,179 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterSchemaWithImplictT
     LOG(INFO) << "row: " << idx << " : " << s.str();
   }
   ASSERT_GE(record_size, 20);
-  LOG(INFO) << "Total records read by GetChanges call on stream_id_1 after alter table: "
-            << record_size;
+  LOG(INFO) << "Total records read by GetChanges call, after alter table: " << record_size;
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKRemoveColumnsWithImplictTransaction)) {
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(
+      &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, false, "", "public",
+      kValue2ColumnName));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRows(1 /* start */, 10 /* end */, &test_cluster_, kValue2ColumnName));
+
+  table = ASSERT_RESULT(DropColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+  ASSERT_OK(WriteRows(11 /* start */, 20 /* end */, &test_cluster_));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  for (uint32_t idx = 0; idx < record_size; idx++) {
+    const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
+    std::stringstream s;
+    for (int jdx = 0; jdx < record.row_message().new_tuple_size(); jdx++) {
+      s << " " << record.row_message().new_tuple(jdx).datum_int32();
+    }
+    LOG(INFO) << "row: " << idx << " : " << s.str();
+  }
+  ASSERT_GE(record_size, 20);
+  LOG(INFO) << "Total records read by GetChanges call, alter table: " << record_size;
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKRemoveColumnsWithExplictTransaction)) {
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(
+      &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, false, "", "public",
+      kValue2ColumnName));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRowsHelper(1 /* start */, 10 /* end */, &test_cluster_, true, kValue2ColumnName));
+
+  table = ASSERT_RESULT(DropColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+  ASSERT_OK(WriteRowsHelper(11 /* start */, 20 /* end */, &test_cluster_, true));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  for (uint32_t idx = 0; idx < record_size; idx++) {
+    const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
+    std::stringstream s;
+    for (int jdx = 0; jdx < record.row_message().new_tuple_size(); jdx++) {
+      s << " " << record.row_message().new_tuple(jdx).datum_int32();
+    }
+    LOG(INFO) << "row: " << idx << " : " << s.str();
+  }
+  ASSERT_GE(record_size, 20);
+  LOG(INFO) << "Total records read by GetChanges call, after alter table: " << record_size;
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKRenameColumnsWithImplictTransaction)) {
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(
+      &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, false, "", "public",
+      kValue2ColumnName));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRows(1 /* start */, 10 /* end */, &test_cluster_, kValue2ColumnName));
+
+  table = ASSERT_RESULT(RenameColumn(
+      &test_cluster_, kNamespaceName, kTableName, kValue2ColumnName, kValue3ColumnName));
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+  ASSERT_OK(WriteRows(11 /* start */, 20 /* end */, &test_cluster_, kValue3ColumnName));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  for (uint32_t idx = 0; idx < record_size; idx++) {
+    const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
+    std::stringstream s;
+    for (int jdx = 0; jdx < record.row_message().new_tuple_size(); jdx++) {
+      s << " column_name: " << record.row_message().new_tuple(jdx).column_name()
+        << " column_value: " << record.row_message().new_tuple(jdx).datum_int32();
+    }
+    LOG(INFO) << "row: " << idx << " : " << s.str();
+  }
+  ASSERT_GE(record_size, 20);
+  LOG(INFO) << "Total records read by GetChanges call, alter table: " << record_size;
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKRenameColumnsWithExplictTransaction)) {
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(
+      &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, false, "", "public",
+      kValue2ColumnName));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRowsHelper(1 /* start */, 10 /* end */, &test_cluster_, true, kValue2ColumnName));
+
+  table = ASSERT_RESULT(RenameColumn(
+      &test_cluster_, kNamespaceName, kTableName, kValue2ColumnName, kValue3ColumnName));
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+  ASSERT_OK(WriteRowsHelper(11 /* start */, 20 /* end */, &test_cluster_, true, kValue3ColumnName));
+
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  for (uint32_t idx = 0; idx < record_size; idx++) {
+    const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
+    std::stringstream s;
+    for (int jdx = 0; jdx < record.row_message().new_tuple_size(); jdx++) {
+      s << " column_name: " << record.row_message().new_tuple(jdx).column_name()
+        << " column_value: " << record.row_message().new_tuple(jdx).datum_int32();
+    }
+    LOG(INFO) << "row: " << idx << " : " << s.str();
+  }
+  ASSERT_GE(record_size, 20);
+  LOG(INFO) << "Total records read by GetChanges call, alter table: " << record_size;
 }
 
 }  // namespace enterprise
