@@ -96,11 +96,6 @@ METRIC_DEFINE_gauge_int64(
     {0, yb::AggregationFunction::kSum} /* optional_args */);
 
 METRIC_DEFINE_gauge_uint64(
-    cdc, cdcsdk_intentdb_size_bytes, "CDCSDK intentDB size in bytes.",
-    yb::MetricUnit::kBytes, "CDCSDK intentDB size in bytes.",
-    {0, yb::AggregationFunction::kSum} /* optional_args */);
-
-METRIC_DEFINE_gauge_uint64(
     cdc, cdcsdk_expiry_time_ms, "CDCSDK stream expiry in milliseconds",
     yb::MetricUnit::kMilliseconds, "CDCSDK stream expiry in milliseconds.",
     {0, yb::AggregationFunction::kMax} /* optional_args */);
@@ -153,7 +148,6 @@ CDCTabletMetrics::CDCTabletMetrics(const scoped_refptr<MetricEntity>& entity)
       MINIT(cdcsdk_traffic_sent),
       GINIT(cdcsdk_change_event_count),
       GINIT(cdcsdk_expiry_time_ms),
-      GINIT(cdcsdk_intentdb_size_bytes),
       GINIT(is_bootstrap_required),
       GINIT(last_getchanges_time),
       GINIT(time_since_last_getchanges),

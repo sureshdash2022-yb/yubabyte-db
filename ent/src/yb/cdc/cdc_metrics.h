@@ -82,7 +82,6 @@ class CDCTabletMetrics {
   scoped_refptr<Counter> cdcsdk_traffic_sent;
   scoped_refptr<AtomicGauge<int64_t>> cdcsdk_change_event_count;
   scoped_refptr<AtomicGauge<uint64_t>> cdcsdk_expiry_time_ms;
-  scoped_refptr<AtomicGauge<uint64_t>> cdcsdk_intentdb_size_bytes;
 
   // Info about if a tablet has fallen too far behind in replication.
   scoped_refptr<AtomicGauge<bool>> is_bootstrap_required;

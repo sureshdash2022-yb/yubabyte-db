@@ -104,7 +104,6 @@ Status PrometheusWriter::WriteSingleEntry(
     const MetricEntity::AttributeMap& attr, const std::string& name, int64_t value,
     AggregationFunction aggregation_function) {
   auto it = attr.find("table_id");
-
   if (it == attr.end()) {
     return FlushSingleEntry(attr, name, value);
   }

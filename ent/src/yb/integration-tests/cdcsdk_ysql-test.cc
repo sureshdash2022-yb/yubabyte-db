@@ -3871,58 +3871,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKTrafficSentMetric)) {
       "Wait for CDCSDK traffic sent attribute update."));
 }
 
-TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKIntentDbSizeMetric)) {
-  FLAGS_update_metrics_interval_ms = 1;
-  FLAGS_update_min_cdc_indices_interval_secs = 1;
-  FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
-  ASSERT_OK(SetUpWithParams(1, 1, false));
-
-  const uint32_t num_tablets = 1;
-  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
-  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
-  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
-  ASSERT_EQ(tablets.size(), num_tablets);
-
-  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
-  CDCStreamId stream_id;
-  stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
-
-  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
-  ASSERT_FALSE(resp.has_error());
-
-  const auto& tserver = test_cluster()->mini_tablet_server(0)->server();
-  auto cdc_service = dynamic_cast<CDCServiceImpl*>(
-      tserver->rpc_server()->TEST_service_pool("yb.cdc.CDCService")->TEST_get_service().get());
-  ASSERT_OK(WriteRowsHelper(1, 100, &test_cluster_, true));
-  ASSERT_OK(test_client()->FlushTables(
-      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
-      /* is_compaction = */ false));
-
-  // Call get changes.
-  GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
-  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
-  ASSERT_GT(record_size, 100);
-  auto metrics = cdc_service->GetCDCTabletMetrics(
-      {"" /* UUID */, stream_id, tablets[0].tablet_id()},
-      /* tablet_peer */ nullptr,
-      CreateCDCMetricsEntity::kFalse);
-  uint64_t current_intentdb_size_bytes = metrics->cdcsdk_intentdb_size_bytes->value();
-  LOG(INFO) << "IntentDB size in bytes after GetChanges call: " << current_intentdb_size_bytes;
-  GetChangesResponsePB new_change_resp =
-      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
-  record_size = new_change_resp.cdc_sdk_proto_records_size();
-
-  ASSERT_OK(WaitFor(
-      [&]() -> Result<bool> {
-        auto metrics =
-            cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablets[0].tablet_id()});
-        LOG(INFO) << "current IntentDB size in bytes : "
-                  << metrics->cdcsdk_intentdb_size_bytes->value();
-        return current_intentdb_size_bytes > metrics->cdcsdk_intentdb_size_bytes->value();
-      },
-      MonoDelta::FromSeconds(10) * kTimeMultiplier, "Wait for stream expiry time update."));
-}
-
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKChangeEventCountMetric)) {
   FLAGS_update_metrics_interval_ms = 1;
   FLAGS_update_min_cdc_indices_interval_secs = 1;

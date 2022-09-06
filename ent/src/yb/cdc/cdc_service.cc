@@ -1624,13 +1624,6 @@ void CDCServiceImpl::UpdateCDCMetrics() {
             }
           }
         }
-
-        auto intent_count = tablet_peer->tablet()->CountIntents();
-        if (intent_count.ok()) {
-          tablet_metric->cdcsdk_intentdb_size_bytes->set_value(*intent_count);
-        } else {
-          tablet_metric->cdcsdk_intentdb_size_bytes->set_value(0);
-        }
       }
     }
   }
@@ -3096,12 +3089,6 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
     }
     tablet_metric->cdcsdk_change_event_count->set_value(resp->cdc_sdk_proto_records_size());
     tablet_metric->cdcsdk_expiry_time_ms->set_value(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms));
-    auto intent_count = tablet_peer->tablet()->CountIntents();
-    if (intent_count.ok()) {
-      tablet_metric->cdcsdk_intentdb_size_bytes->set_value(*intent_count);
-    } else {
-      tablet_metric->cdcsdk_intentdb_size_bytes->set_value(0);
-    }
   }
 
   if (resp->records_size() > 0 || resp->cdc_sdk_proto_records_size() > 0) {
