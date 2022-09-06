@@ -296,8 +296,8 @@ Result<YBTableName> CDCSDKTestBase::RenameColumn(
     const std::string& schema_name) {
   auto conn = VERIFY_RESULT(cluster->ConnectToDB(namespace_name));
   RETURN_NOT_OK(conn.ExecuteFormat(
-      "ALTER TABLE $0.$1 RENAME COLUMN $2 TO $3", schema_name, table_name + enum_suffix, old_column_name,
-      new_column_name));
+      "ALTER TABLE $0.$1 RENAME COLUMN $2 TO $3", schema_name, table_name + enum_suffix,
+      old_column_name, new_column_name));
   return GetTable(cluster, namespace_name, table_name + enum_suffix);
 }
 
