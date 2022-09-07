@@ -251,7 +251,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   // The range is exclusive of end i.e. [start, end)
   Status WriteRows(
-      uint32_t start, uint32_t end, Cluster* cluster, const vector<string>& optional_cols_name = {}) {
+      uint32_t start, uint32_t end, Cluster* cluster,
+      const vector<string>& optional_cols_name = {}) {
     auto conn = VERIFY_RESULT(cluster->ConnectToDB(kNamespaceName));
     LOG(INFO) << "Writing " << end - start << " row(s)";
 
@@ -260,10 +261,10 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
         std::stringstream columns_name;
         std::stringstream columns_value;
         columns_name << "( " << kKeyColumnName << "," << kValueColumnName;
-        columns_value << "( " << i << "," << i+1;
+        columns_value << "( " << i << "," << i + 1;
         for (const auto& optional_col_name : optional_cols_name) {
           columns_name << ", " << optional_col_name;
-          columns_value << "," << i+1;
+          columns_value << "," << i + 1;
         }
         columns_name << " )";
         columns_value << " )";
@@ -3992,7 +3993,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKDropColumnsWithRestartT
   // Insert some records in transaction.
   ASSERT_OK(WriteRows(1 /* start */, 10 /* end */, &test_cluster_, {kValue2ColumnName}));
 
-  auto table1 = ASSERT_RESULT(DropColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  auto table1 =
+      ASSERT_RESULT(DropColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
   ASSERT_OK(WriteRows(11 /* start */, 20 /* end */, &test_cluster_));
 
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
@@ -4004,7 +4006,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKDropColumnsWithRestartT
     ASSERT_OK(test_cluster()->mini_tablet_server(idx)->Start());
     ASSERT_OK(test_cluster()->mini_tablet_server(idx)->WaitStarted());
   }
-
 
   GetChangesResponsePB change_resp;
   auto result = GetChangesFromCDC(stream_id, tablets);
@@ -4053,7 +4054,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleDDLWithRestartT
 
   auto table1 =
       ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue3ColumnName));
-  ASSERT_OK(WriteRows(6 /* start */, 10 /* end */, &test_cluster_, {kValue2ColumnName, kValue3ColumnName}));
+  ASSERT_OK(WriteRows(
+      6 /* start */, 10 /* end */, &test_cluster_, {kValue2ColumnName, kValue3ColumnName}));
 
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
   auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
