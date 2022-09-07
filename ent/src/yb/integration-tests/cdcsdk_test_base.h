@@ -143,7 +143,7 @@ class CDCSDKTestBase : public YBTest {
       bool enum_value = false,
       const std::string& enum_suffix = "",
       const std::string& schema_name = "public",
-      const std::string& optional_col_name = "");
+      const std::vector<string>& optional_cols_name = {});
 
   Result<YBTableName> AddColumn(
       Cluster* cluster,

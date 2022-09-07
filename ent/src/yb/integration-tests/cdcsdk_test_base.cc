@@ -220,7 +220,7 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
     const bool enum_value,
     const std::string& enum_suffix,
     const std::string& schema_name,
-    const std::string& optional_col_name) {
+    const std::vector<string>& optional_cols_name) {
   auto conn = VERIFY_RESULT(cluster->ConnectToDB(namespace_name));
 
   if (enum_value) {
@@ -238,14 +238,24 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
     RETURN_NOT_OK(conn.Execute("set yb_enable_create_with_table_oid=true"));
     table_oid_string = Format("table_oid = $0,", table_oid);
   }
-  if (!optional_col_name.empty()) {
+  if (!optional_cols_name.empty()) {
+    std::stringstream columns_name;
+    std::stringstream columns_value;
+    string primary_key = add_primary_key ? "PRIMARY KEY" : "";
+    string second_column_type =
+        enum_value ? (schema_name + "." + "coupon_discount_type" + enum_suffix) : " int";
+    columns_name << "( " << kKeyColumnName << " int " << primary_key << "," << kValueColumnName
+                 << second_column_type;
+    for (const auto& optional_col_name : optional_cols_name) {
+      columns_name << " , " << optional_col_name << " int ";
+    }
+    columns_name << " )";
+    columns_value << " )";
     RETURN_NOT_OK(conn.ExecuteFormat(
-        "CREATE TABLE $0.$1($2 int $3, $4 $5, $6 int) WITH ($7colocated = $8) "
-        "SPLIT INTO $9 TABLETS",
-        schema_name, table_name + enum_suffix, kKeyColumnName,
-        (add_primary_key) ? "PRIMARY KEY" : "", kValueColumnName,
-        enum_value ? (schema_name + "." + "coupon_discount_type" + enum_suffix) : "int",
-        optional_col_name, table_oid_string, colocated, num_tablets));
+        "CREATE TABLE $0.$1 $2 WITH ($3colocated = $4) "
+        "SPLIT INTO $5 TABLETS",
+        schema_name, table_name + enum_suffix, columns_name.str(), table_oid_string,
+        colocated, num_tablets));
   } else {
     RETURN_NOT_OK(conn.ExecuteFormat(
         "CREATE TABLE $0.$1($2 int $3, $4 $5) WITH ($6colocated = $7) "
