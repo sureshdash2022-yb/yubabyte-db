@@ -4052,10 +4052,22 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleDDLWithRestartT
   // Insert some records in transaction.
   ASSERT_OK(WriteRows(1 /* start */, 5 /* end */, &test_cluster_, {kValue2ColumnName}));
 
+  // Add a column
   auto table1 =
       ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue3ColumnName));
   ASSERT_OK(WriteRows(
       6 /* start */, 10 /* end */, &test_cluster_, {kValue2ColumnName, kValue3ColumnName}));
+
+  // remove one column
+   table1 =
+      ASSERT_RESULT(DropColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  ASSERT_OK(WriteRows(
+      11 /* start */, 15 /* end */, &test_cluster_));
+
+  // add the 2 columns
+  table1 = ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue4ColumnName));
+  ASSERT_OK(WriteRows(
+      16 /* start */, 20 /* end */, &test_cluster_));
 
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
   auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));

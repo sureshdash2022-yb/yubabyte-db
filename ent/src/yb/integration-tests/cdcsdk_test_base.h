@@ -55,6 +55,7 @@ constexpr static const char* const kKeyColumnName = "key";
 constexpr static const char* const kValueColumnName = "value_1";
 constexpr static const char* const kValue2ColumnName = "value_2";
 constexpr static const char* const kValue3ColumnName = "value_3";
+constexpr static const char* const kValue4ColumnName = "value_4";
 
 struct CDCSDKTestParams {
   CDCSDKTestParams(int batch_size_, bool enable_replicate_intents_) :

@@ -22,6 +22,7 @@
 
 #include "yb/util/flag_tags.h"
 #include "yb/util/logging.h"
+#include "yb/consensus/log.h"
 
 DEFINE_int32(cdc_snapshot_batch_size, 250, "Batch size for the snapshot operation in CDC");
 TAG_FLAG(cdc_snapshot_batch_size, runtime);
@@ -810,7 +811,7 @@ Status GetChangesForCDCSDK(
         last_seen_op_id.index = msg->id().index();
 
         if (!schema_streamed && !(**cached_schema).initialized()) {
-          current_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
+          current_schema.CopyFrom(*tablet_peer->tablet()->schema().get()); // latest version-
           string table_name = tablet_peer->tablet()->metadata()->table_name();
           schema_streamed = true;
 
@@ -890,7 +891,6 @@ Status GetChangesForCDCSDK(
               RETURN_NOT_OK(PopulateCDCSDKDDLRecord(
                   msg, resp->add_cdc_sdk_proto_records(), table_name, current_schema));
             }
-            LOG(INFO) <<"suresh: Metadata changes ........";
             SetCheckpoint(
                 msg->id().term(), msg->id().index(), 0, "", 0, &checkpoint, last_streamed_op_id);
             checkpoint_updated = true;

@@ -296,7 +296,6 @@ class CDCServiceImpl::Impl {
                                          const bool need_schema_info) {
     std::lock_guard<decltype(mutex_)> l(mutex_);
     auto it = cdc_state_metadata_.find(producer_tablet);
-
     if (it != cdc_state_metadata_.end()) {
       if (need_schema_info) {
         it->current_schema = std::make_shared<Schema>();
@@ -1044,7 +1043,6 @@ Result<SetCDCCheckpointResponsePB> CDCServiceImpl::SetCDCCheckpoint(
 
   auto tablet_peer_result = context_->GetServingTablet(req.tablet_id());
   auto status = ResultToStatus(tablet_peer_result);
-
   // Case-1 The connected tserver does not contain the requested tablet_id.
   // Case-2 The connected tserver does not contain the tablet LEADER.
   if (status.IsNotFound() || !IsTabletPeerLeader(*tablet_peer_result)) {
@@ -1379,12 +1377,77 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
         enum_map_result.ok(), enum_map_result.status(), resp->mutable_error(),
         CDCErrorPB::INTERNAL_ERROR, context);
 
+    int64_t next_index = op_id.index + 1;
+    int64_t start_index = op_id.index;
+    if (op_id.index == 0) {
+      start_index = next_index;
+    }
+
+    consensus::ReplicateMsgs replicates;
+    int64_t starting_op_segment_seq_num;
+    yb::SchemaPB schema;
+    uint32_t schema_version;
+
+    // auto log = tablet_peer->log();
+    auto log = tablet_peer->log();
+    auto log_result = log->GetLogReader()->ReadReplicatesInRange(
+        start_index,
+        next_index,
+        0,
+        &replicates,
+        &starting_op_segment_seq_num,
+        &schema,
+        &schema_version);
+    if (log_result.ok()) {
+      LOG(INFO) << "Latest schema present before the from op_id: " << schema.DebugString();
+    }
+    // auto log = tablet_peer->log();
+    // int64_t starting_op_segment_seq_num;
+    SchemaPB header_schema;
+    Schema current_schema;
+
+    const auto seg_num_result = log->GetLogReader()->LookupOpWalSegmentNumber(next_index);
+    if (seg_num_result.ok()) {
+      consensus::ReadOpsResult result;
+      starting_op_segment_seq_num = *seg_num_result;
+      const auto segment_result =
+          log->GetLogReader()->GetSegmentBySequenceNumber(starting_op_segment_seq_num);
+      if (!segment_result.ok()) {
+        if (segment_result.status().IsNotFound()) {
+          // Just ignore that.
+          // return Status::OK();
+        }
+        // Return error.
+        // return segment_result.status();
+      }
+      const auto& header = (*segment_result)->header();
+      if (header.has_schema()) {
+        header_schema.CopyFrom(header.schema());
+        LOG(INFO) << "Segement header read from the current log segment: "
+                  << header.schema().DebugString();
+        // result->header_schema_version = header.schema_version();
+      }
+    }
+    if (!cached_schema->initialized()) {
+      auto result = SchemaFromPB(header_schema, &current_schema);
+      if (result.ok()) {
+        cached_schema = std::make_shared<Schema>(std::move(current_schema));
+      }
+
+      if (schema.IsInitialized()) {
+        auto result = SchemaFromPB(header_schema, &current_schema);
+        if (result.ok()) {
+          cached_schema = std::make_shared<Schema>(std::move(current_schema));
+        }
+      }
+    }
+
     status = GetChangesForCDCSDK(
         req->stream_id(), req->tablet_id(), cdc_sdk_op_id, record, tablet_peer, mem_tracker,
         *enum_map_result, &msgs_holder, resp, &commit_timestamp, &cached_schema,
         &last_streamed_op_id, &last_readable_index, get_changes_deadline);
-    // This specific error from the docdb_pgapi layer is used to identify enum cache entry is out of
-    // date, hence we need to repopulate.
+    // This specific error from the docdb_pgapi layer is used to identify enum cache entry is out
+    // of date, hence we need to repopulate.
     if (status.IsCacheMissError()) {
       {
         // Recreate the enum cache entry for the corresponding namespace.
