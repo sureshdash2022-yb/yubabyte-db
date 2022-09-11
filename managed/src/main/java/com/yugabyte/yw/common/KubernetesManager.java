@@ -4,7 +4,6 @@ package com.yugabyte.yw.common;
 
 import com.google.common.collect.ImmutableList;
 import com.yugabyte.yw.common.helm.HelmUtils;
-
 import io.fabric8.kubernetes.api.model.LoadBalancerIngress;
 import io.fabric8.kubernetes.api.model.Node;
 import io.fabric8.kubernetes.api.model.Pod;
@@ -21,7 +20,6 @@ import java.util.Map;
 import java.util.UUID;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -131,6 +129,20 @@ public abstract class KubernetesManager {
     String helmReleaseName = Util.sanitizeHelmReleaseName(universePrefix);
     List<String> commandList = ImmutableList.of("helm", "delete", helmReleaseName, "-n", namespace);
     execCommand(config, commandList);
+  }
+
+  public String helmShowValues(String ybSoftwareVersion, Map<String, String> config) {
+    String helmPackagePath = this.getHelmPackagePath(ybSoftwareVersion);
+    List<String> commandList = ImmutableList.of("helm", "show", "values", helmPackagePath);
+    LOG.info(String.join(" ", commandList));
+    ShellResponse response = execCommand(config, commandList);
+    if (response != null) {
+      if (response.getCode() != ShellResponse.ERROR_CODE_SUCCESS) {
+        throw new RuntimeException(response.getMessage());
+      }
+      return response.getMessage();
+    }
+    return null;
   }
 
   /* helm helpers */
@@ -268,4 +280,6 @@ public abstract class KubernetesManager {
       Map<String, String> config, String universePrefix, String namespace);
 
   public abstract void deleteNamespace(Map<String, String> config, String namespace);
+
+  public abstract void deletePod(Map<String, String> config, String namespace, String podName);
 }
