@@ -1618,10 +1618,8 @@ void CDCServiceImpl::UpdateCDCMetrics() {
             if (now < expiry_time) {
               // Convert to milli seconds.
               remaining_expiry_time = (expiry_time - now) / 1000;
-              tablet_metric->cdcsdk_expiry_time_ms->set_value(remaining_expiry_time);
-            } else {
-              tablet_metric->cdcsdk_expiry_time_ms->set_value(remaining_expiry_time);
             }
+            tablet_metric->cdcsdk_expiry_time_ms->set_value(remaining_expiry_time);
           }
         }
       }
@@ -3087,7 +3085,7 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
       tablet_metric->cdcsdk_traffic_sent->IncrementBy(
           resp->cdc_sdk_proto_records_size() * resp->cdc_sdk_proto_records(0).ByteSize());
     }
-    tablet_metric->cdcsdk_change_event_count->set_value(resp->cdc_sdk_proto_records_size());
+    tablet_metric->cdcsdk_change_event_count->IncrementBy(resp->cdc_sdk_proto_records_size());
     tablet_metric->cdcsdk_expiry_time_ms->set_value(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms));
   }
 

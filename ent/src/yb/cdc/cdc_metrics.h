@@ -75,12 +75,15 @@ class CDCTabletMetrics {
   // Lag between last record applied on consumer and producer.
   scoped_refptr<AtomicGauge<int64_t> > async_replication_committed_lag_micros;
 
-  // Lag between last committed record in the producer and last send record to user.
+  // Lag between last committed record in the producer and last the sent record.
   scoped_refptr<AtomicGauge<int64_t>> cdcsdk_sent_lag_micros;
-  // Lag between last committed record in the producer and first send record to user.
+  // Lag between last committed record in the producer and first the sent record.
   scoped_refptr<AtomicGauge<int64_t>> cdcsdk_committed_lag_micros;
+  // Total traffic sent in bytes.
   scoped_refptr<Counter> cdcsdk_traffic_sent;
-  scoped_refptr<AtomicGauge<int64_t>> cdcsdk_change_event_count;
+  // Total change events sent.
+  scoped_refptr<Counter> cdcsdk_change_event_count;
+  // Remaining expiry time of stream in milli seconds.
   scoped_refptr<AtomicGauge<uint64_t>> cdcsdk_expiry_time_ms;
 
   // Info about if a tablet has fallen too far behind in replication.

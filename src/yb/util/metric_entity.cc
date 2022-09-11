@@ -305,6 +305,7 @@ Status MetricEntity::WriteForPrometheus(PrometheusWriter* writer,
   if (!entity_options.metrics.empty() && !select_all && metrics.empty()) {
     return Status::OK();
   }
+
   AttributeMap prometheus_attr;
   // Per tablet metrics come with tablet_id, as well as table_id and table_name attributes.
   // We ignore the tablet part to squash at the table level.
