@@ -746,7 +746,7 @@ Status SysCatalogTable::Visit(VisitorBase* visitor) {
   uint64_t count = 0;
   RETURN_NOT_OK(EnumerateSysCatalog(
       tablet.get(), doc_read_context_->schema, visitor->entry_type(),
-      ReadHybridTime::Max(),[visitor, &count](const Slice& id, const Slice& data) {
+      ReadHybridTime::Max(), [visitor, &count](const Slice& id, const Slice& data) {
         ++count;
         return visitor->Visit(id, data);
       }));
@@ -1588,7 +1588,7 @@ Status SysCatalogTable::FetchDdlLog(google::protobuf::RepeatedPtrField<DdlLogEnt
 
   return EnumerateSysCatalog(
       tablet.get(), doc_read_context_->schema, SysRowEntryType::DDL_LOG_ENTRY,
-      ReadHybridTime::Max(),[entries](const Slice& id, const Slice& data)->Status {
+      ReadHybridTime::Max(), [entries](const Slice& id, const Slice& data)->Status {
         *entries->Add() = VERIFY_RESULT(pb_util::ParseFromSlice<DdlLogEntryPB>(data));
         return Status::OK();
       });

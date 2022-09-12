@@ -721,7 +721,7 @@ Status RestoreSysCatalogState::IterateSysCatalog(
       doc_read_context.schema, doc_read_context, TransactionOperationContext(), doc_db,
       CoarseTimePoint::max(), ReadHybridTime::SingleTime(read_time), nullptr);
   return EnumerateSysCatalog(
-      iter.get(), doc_read_context.schema, GetEntryType<PB>::value,[map, sequences_data_map](
+      iter.get(), doc_read_context.schema, GetEntryType<PB>::value, [map, sequences_data_map](
           const Slice& id, const Slice& data) -> Status {
     auto pb = VERIFY_RESULT(pb_util::ParseFromSlice<PB>(data));
     if (!ShouldLoadObject(pb)) {
