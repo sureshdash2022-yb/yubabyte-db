@@ -270,6 +270,68 @@ static TabletInfo *CreateTablet(TableInfo *table,
   return tablet;
 }
 
+TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
+  SysCatalogTable* sys_catalog = master_->catalog_manager()->sys_catalog();
+
+  unique_ptr<TestTableLoader> loader(new TestTableLoader());
+  ASSERT_OK(sys_catalog->Visit(loader.get()));
+  ASSERT_EQ(kNumSystemTables, loader->tables.size());
+
+  // Create new table.
+  const std::string table_id = "test_table_id";
+  scoped_refptr<TableInfo> table = master_->catalog_manager()->NewTableInfo(table_id);
+  {
+    auto l = table->LockForWrite();
+    l.mutable_data()->pb.set_name("test_table");
+    l.mutable_data()->pb.set_version(0);
+    l.mutable_data()->pb.mutable_replication_info()->mutable_live_replicas()->set_num_replicas(1);
+    l.mutable_data()->pb.set_state(SysTablesEntryPB::PREPARING);
+    const Schema kTableSchema({ColumnSchema("key", INT32), ColumnSchema("value_1", INT32)}, 1);
+
+    SchemaToPB(kTableSchema, l.mutable_data()->pb.mutable_schema());
+    // Add the table
+    ASSERT_OK(sys_catalog->Upsert(kLeaderTerm, table));
+    l.Commit();
+  }
+
+  // Verify it showed up.
+  loader->Reset();
+  ASSERT_OK(sys_catalog->Visit(loader.get()));
+
+  ASSERT_EQ(1 + kNumSystemTables, loader->tables.size());
+  ASSERT_METADATA_EQ(table.get(), loader->tables[table_id]);
+  Schema schema_from_sys;
+  Schema schema_ip_table;
+  ASSERT_OK(table.get()->GetSchema(&schema_ip_table));
+  ASSERT_OK(loader->tables[table_id]->GetSchema(&schema_from_sys));
+
+  for (auto& ech_col_name : schema_from_sys.column_names()) {
+    LOG(INFO) << "suresh: col_name: " << ech_col_name;
+  }
+
+  // alter the table by adding new column.
+  {
+    auto l = table->LockForWrite();
+    l.mutable_data()->pb.set_name("test_table");
+    l.mutable_data()->pb.set_version(1);
+    l.mutable_data()->pb.mutable_replication_info()->mutable_live_replicas()->set_num_replicas(1);
+    l.mutable_data()->pb.set_state(SysTablesEntryPB::ALTERING);
+    const Schema kTableSchema({ColumnSchema("key", INT32), ColumnSchema("value_2", INT32)}, 1);
+
+    SchemaToPB(kTableSchema, l.mutable_data()->pb.mutable_schema());
+    // Add the table
+    ASSERT_OK(sys_catalog->Upsert(kLeaderTerm, table));
+
+    l.Commit();
+  }
+  loader->Reset();
+  ASSERT_OK(sys_catalog->Visit(loader.get()));
+  ASSERT_OK(loader->tables[table_id]->GetSchema(&schema_from_sys));
+  for (auto& ech_col_name : schema_from_sys.column_names()) {
+    LOG(INFO) << "suresh: After alter col_name: " << ech_col_name;
+  }
+}
+
 // Test the sys-catalog tablets basic operations (add, update, delete,
 // visit)
 TEST_F(SysCatalogTest, TestSysCatalogTabletsOperations) {

@@ -295,10 +295,10 @@ class MasterSnapshotCoordinator::Impl {
   template <class Pb, class Map>
   Status LoadEntryOfType(
       tablet::Tablet* tablet, const SysRowEntryType& type, Map* m) REQUIRES(mutex_) {
-    return EnumerateSysCatalog(tablet, context_.schema(), type,
-        [this, &m](const Slice& id, const Slice& data) NO_THREAD_SAFETY_ANALYSIS -> Status {
-          return LoadEntry<Pb>(id, data, m);
-    });
+    return EnumerateSysCatalog(
+        tablet, context_.schema(), type,
+        ReadHybridTime::Max(), [this, &m](const Slice& id, const Slice& data)
+            NO_THREAD_SAFETY_ANALYSIS->Status { return LoadEntry<Pb>(id, data, m); });
   }
 
   Status Load(tablet::Tablet* tablet) {

@@ -121,7 +121,7 @@ using EnumerationCallback = std::function<Status(const Slice& id, const Slice& d
 // catalog.
 Status EnumerateSysCatalog(
     tablet::Tablet* tablet, const Schema& schema, int8_t entry_type,
-    const EnumerationCallback& callback);
+    const ReadHybridTime read_hybrid_time, const EnumerationCallback& callback);
 Status EnumerateSysCatalog(
     docdb::DocRowwiseIterator* doc_iter, const Schema& schema, int8_t entry_type,
     const EnumerationCallback& callback);

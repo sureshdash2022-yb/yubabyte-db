@@ -35,6 +35,8 @@ class VisitorBase {
 
   virtual int entry_type() const = 0;
 
+  //virtual ReadHybridTime read_hybrid_time() const = 0;
+
   virtual Status Visit(Slice id, Slice data) = 0;
 
  protected:
@@ -56,6 +58,8 @@ class Visitor : public VisitorBase {
   }
 
   int entry_type() const { return PersistentDataEntryClass::type(); }
+
+  //ReadHybridTime read_hybrid_time() const {return PersistentDataEntryClass::ReadHybridTime();}
 
  protected:
   virtual Status Visit(

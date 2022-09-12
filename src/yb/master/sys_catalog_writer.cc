@@ -169,9 +169,9 @@ Status FillSysCatalogWriteRequest(
 
 Status EnumerateSysCatalog(
     tablet::Tablet* tablet, const Schema& schema, int8_t entry_type,
-    const EnumerationCallback& callback) {
+    const ReadHybridTime read_hybrid_time,  const EnumerationCallback& callback) {
   auto iter = VERIFY_RESULT(tablet->NewRowIterator(
-      schema.CopyWithoutColumnIds(), ReadHybridTime::Max(), /* table_id= */ "",
+      schema.CopyWithoutColumnIds(), read_hybrid_time, /* table_id= */ "",
       CoarseTimePoint::max(), tablet::AllowBootstrappingState::kTrue));
 
   return EnumerateSysCatalog(

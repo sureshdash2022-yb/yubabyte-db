@@ -744,11 +744,12 @@ Status SysCatalogTable::Visit(VisitorBase* visitor) {
   auto start = CoarseMonoClock::Now();
 
   uint64_t count = 0;
-  RETURN_NOT_OK(EnumerateSysCatalog(tablet.get(), doc_read_context_->schema, visitor->entry_type(),
-                                    [visitor, &count](const Slice& id, const Slice& data) {
-    ++count;
-    return visitor->Visit(id, data);
-  }));
+  RETURN_NOT_OK(EnumerateSysCatalog(
+      tablet.get(), doc_read_context_->schema, visitor->entry_type(),
+      ReadHybridTime::Max(),[visitor, &count](const Slice& id, const Slice& data) {
+        ++count;
+        return visitor->Visit(id, data);
+      }));
 
   auto duration = CoarseMonoClock::Now() - start;
   string id = Format("num_entries_with_type_$0_loaded", std::to_string(visitor->entry_type()));
@@ -1587,10 +1588,10 @@ Status SysCatalogTable::FetchDdlLog(google::protobuf::RepeatedPtrField<DdlLogEnt
 
   return EnumerateSysCatalog(
       tablet.get(), doc_read_context_->schema, SysRowEntryType::DDL_LOG_ENTRY,
-      [entries](const Slice& id, const Slice& data) -> Status {
-    *entries->Add() = VERIFY_RESULT(pb_util::ParseFromSlice<DdlLogEntryPB>(data));
-    return Status::OK();
-  });
+      ReadHybridTime::Max(),[entries](const Slice& id, const Slice& data)->Status {
+        *entries->Add() = VERIFY_RESULT(pb_util::ParseFromSlice<DdlLogEntryPB>(data));
+        return Status::OK();
+      });
 }
 
 std::string SysCatalogTable::tablet_id() const {
