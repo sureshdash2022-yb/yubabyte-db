@@ -740,7 +740,7 @@ Status SysCatalogTable::Visit(VisitorBase* visitor) {
   if (!tablet) {
     return STATUS(ShutdownInProgress, "SysConfig is shutting down.");
   }
-  //visitor->hybrid_time;
+  // visitor->hybrid_time;
   auto start = CoarseMonoClock::Now();
 
   uint64_t count = 0;

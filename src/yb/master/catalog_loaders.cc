@@ -578,7 +578,7 @@ Status XClusterSafeTimeLoader::Visit(
 #if 0
 Status TableSchemaLoader::Visit(const TableId& table_id, const SysTablesEntryPB& metadata) {
   // Setup the table info.
-  //scoped_refptr<TableInfo> table = catalog_manager_->NewTableInfo(table_id);
+  // scoped_refptr<TableInfo> table = catalog_manager_->NewTableInfo(table_id);
   scoped_refptr<TableInfo> table = catalog_manager_->tables_schema(table_id);
 
   auto l = table->LockForWrite();
