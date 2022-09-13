@@ -1122,7 +1122,7 @@ Result<std::unique_ptr<docdb::YQLRowwiseIteratorIf>> Tablet::NewRowIterator(
   auto scoped_read_operation = CreateNonAbortableScopedRWOperation();
   RETURN_NOT_OK(scoped_read_operation);
 
-  VLOG_WITH_PREFIX(2) << "Created new Iterator reading at " << read_hybrid_time.ToString();
+  LOG_WITH_PREFIX(INFO) << "Created new Iterator reading at " << read_hybrid_time.ToString();
 
   const std::shared_ptr<tablet::TableInfo> table_info =
       VERIFY_RESULT(metadata_->GetTableInfo(table_id));
@@ -1136,6 +1136,7 @@ Result<std::unique_ptr<docdb::YQLRowwiseIteratorIf>> Tablet::NewRowIterator(
   const auto read_time = read_hybrid_time
       ? read_hybrid_time
       : ReadHybridTime::SingleTime(VERIFY_RESULT(SafeTime(RequireLease::kFalse)));
+  LOG(INFO) << "suresh: read_time in NewRowIterator: " << read_time.read;
   auto result = std::make_unique<DocRowwiseIterator>(
       std::move(mapped_projection), *table_info->doc_read_context, txn_op_ctx,
       doc_db(), deadline, read_time, &pending_non_abortable_op_counter_);

@@ -575,6 +575,23 @@ Status XClusterSafeTimeLoader::Visit(
 
   return Status::OK();
 }
+#if 0
+Status TableSchemaLoader::Visit(const TableId& table_id, const SysTablesEntryPB& metadata) {
+  // Setup the table info.
+  //scoped_refptr<TableInfo> table = catalog_manager_->NewTableInfo(table_id);
+  scoped_refptr<TableInfo> table = catalog_manager_->tables_schema(table_id);
+
+  auto l = table->LockForWrite();
+  auto& pb = l.mutable_data()->pb;
+  pb.CopyFrom(metadata);
+  l.Commit();
+  LOG(INFO) << "Loaded metadata for table " << table->ToString()
+            << ", state: " << SysTablesEntryPB::State_Name(metadata.state());
+  VLOG(1) << "Metadata for table " << table->ToString() << ": " << metadata.ShortDebugString();
+
+  return Status::OK();
+}
+#endif
 
 }  // namespace master
 }  // namespace yb

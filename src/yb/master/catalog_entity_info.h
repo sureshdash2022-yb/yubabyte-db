@@ -955,6 +955,22 @@ class XClusterSafeTimeInfo : public MetadataCowWrapper<PersistentXClusterSafeTim
   // This is a singleton, so We do not use the ID field.
   const std::string fake_id_;
 };
+#if 0
+struct PersistentTableSchemaLoader
+    : public Persistent<SysTablesEntryPB, SysRowEntryType::TABLE> {};
+class TableSchemaLoader : public RefCountedThreadSafe<TableInfo>,
+                          public MetadataCowWrapper<PersistentTableSchemaLoader>,
+                          public MetadataCowWrapper<PersistentTableInfo> {
+ public:
+  TableSchemaLoader() {}
+  ~TableSchemaLoader() = default;
+
+  virtual const std::string& id() const override { return table_id_; }
+
+ private:
+  std::string table_id_;
+};
+#endif
 
 }  // namespace master
 }  // namespace yb

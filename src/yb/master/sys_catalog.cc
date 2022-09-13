@@ -740,13 +740,17 @@ Status SysCatalogTable::Visit(VisitorBase* visitor) {
   if (!tablet) {
     return STATUS(ShutdownInProgress, "SysConfig is shutting down.");
   }
-
+  //visitor->hybrid_time;
   auto start = CoarseMonoClock::Now();
 
   uint64_t count = 0;
+  ReadHybridTime read_hybrid_time =
+      visitor->read_time.read.is_valid() ? visitor->read_time : ReadHybridTime::Max();
+  LOG(INFO) << "suresh: Read hybrid_time: " << visitor->read_time.read
+            << " EnumerateSysCatalog --> read_hybrid_time : " << read_hybrid_time.read;
   RETURN_NOT_OK(EnumerateSysCatalog(
-      tablet.get(), doc_read_context_->schema, visitor->entry_type(),
-      ReadHybridTime::Max(), [visitor, &count](const Slice& id, const Slice& data) {
+      tablet.get(), doc_read_context_->schema, visitor->entry_type(), read_hybrid_time,
+      [visitor, &count](const Slice& id, const Slice& data) {
         ++count;
         return visitor->Visit(id, data);
       }));

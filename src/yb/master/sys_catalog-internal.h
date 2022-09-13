@@ -24,6 +24,7 @@
 #include "yb/master/sys_catalog_constants.h"
 
 #include "yb/util/pb_util.h"
+#include "yb/common/read_hybrid_time.h"
 
 namespace yb {
 namespace master {
@@ -32,6 +33,7 @@ class VisitorBase {
  public:
   VisitorBase() {}
   virtual ~VisitorBase() = default;
+  ReadHybridTime read_time;
 
   virtual int entry_type() const = 0;
 

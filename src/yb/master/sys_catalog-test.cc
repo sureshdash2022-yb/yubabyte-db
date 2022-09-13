@@ -278,6 +278,8 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
   ASSERT_EQ(kNumSystemTables, loader->tables.size());
 
   // Create new table.
+  auto create_table_time = master_->clock()->Now();
+  LOG(INFO) << "suresh: create table time: " << create_table_time.ToString();
   const std::string table_id = "test_table_id";
   scoped_refptr<TableInfo> table = master_->catalog_manager()->NewTableInfo(table_id);
   {
@@ -312,9 +314,7 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
   // alter the table by adding new column.
   {
     auto l = table->LockForWrite();
-    l.mutable_data()->pb.set_name("test_table");
     l.mutable_data()->pb.set_version(1);
-    l.mutable_data()->pb.mutable_replication_info()->mutable_live_replicas()->set_num_replicas(1);
     l.mutable_data()->pb.set_state(SysTablesEntryPB::ALTERING);
     const Schema kTableSchema({ColumnSchema("key", INT32), ColumnSchema("value_2", INT32)}, 1);
 
@@ -324,12 +324,42 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
 
     l.Commit();
   }
+  auto table_update_1_time = master_->clock()->Now();
+
+  // Alter the table by adding 2 clomns
+  {
+    auto l = table->LockForWrite();
+    l.mutable_data()->pb.set_version(2);
+    l.mutable_data()->pb.set_state(SysTablesEntryPB::ALTERING);
+    const Schema kTableSchema(
+        {ColumnSchema("key", INT32), ColumnSchema("value_2", INT32),
+         ColumnSchema("value_3", INT32)},
+        1);
+
+    SchemaToPB(kTableSchema, l.mutable_data()->pb.mutable_schema());
+    // Add the table
+    ASSERT_OK(sys_catalog->Upsert(kLeaderTerm, table));
+
+    l.Commit();
+  }
+
+  Schema schema_from_sys_2;
   loader->Reset();
+
+  // loader->read_time.read = ReadHybridTime::Max().read;
+  loader->read_time = ReadHybridTime::SingleTime(table_update_1_time);
+  // loader->read_time = ReadHybridTime::Max();
+
+  for (auto& ech_col_name : schema_from_sys_2.column_names()) {
+    LOG(INFO) << "suresh: Before alter col_name: " << ech_col_name;
+  }
   ASSERT_OK(sys_catalog->Visit(loader.get()));
-  ASSERT_OK(loader->tables[table_id]->GetSchema(&schema_from_sys));
-  for (auto& ech_col_name : schema_from_sys.column_names()) {
+  ASSERT_OK(loader->tables[table_id]->GetSchema(&schema_from_sys_2));
+  for (auto& ech_col_name : schema_from_sys_2.column_names()) {
     LOG(INFO) << "suresh: After alter col_name: " << ech_col_name;
   }
+  LOG(INFO) << "suresh: schema version is: "
+            << loader->tables[table_id]->LockForRead()->pb.version();
 }
 
 // Test the sys-catalog tablets basic operations (add, update, delete,

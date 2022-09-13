@@ -970,6 +970,7 @@ class CatalogManager :
   friend class RedisConfigLoader;
   friend class SysConfigLoader;
   friend class XClusterSafeTimeLoader;
+  friend class TableSchemaLoader;
   friend class ::yb::master::ScopedLeaderSharedLock;
   friend class PermissionsManager;
   friend class MultiStageAlterTable;
@@ -1531,6 +1532,8 @@ class CatalogManager :
   // Don't have to use VersionTracker for it, since table_ids_map_ already updated at the same time.
   // Note that this map isn't used for YSQL tables.
   TableInfoByNameMap table_names_map_ GUARDED_BY(mutex_);
+
+  std::map<TableId, TableInfoPtr> tables_schema GUARDED_BY(mutex_);
 
   // Set of table ids that are transaction status tables.
   // Don't have to use VersionTracker for it, since table_ids_map_ already updated at the same time.
