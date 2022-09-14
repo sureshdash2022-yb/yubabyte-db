@@ -3403,10 +3403,12 @@ Status CatalogManager::BackfillMetadataForCDC(
     return Status::OK();
   }
 }
-
-Status CatalogManager::CreateCDCStream(const CreateCDCStreamRequestPB* req,
-                                       CreateCDCStreamResponsePB* resp,
-                                       rpc::RpcContext* rpc) {
+Status CatalogManager::GetTableSchemaFromSys(
+    const TableId& table_id, const ReadHybridTime read_hybrid_time, Schema* schema) {
+  return sys_catalog_->GetTableSchema(table_id, read_hybrid_time, schema);
+}
+Status CatalogManager::CreateCDCStream(
+    const CreateCDCStreamRequestPB* req, CreateCDCStreamResponsePB* resp, rpc::RpcContext* rpc) {
   LOG(INFO) << "CreateCDCStream from " << RequestorString(rpc) << ": " << req->ShortDebugString();
   std::string id_type_option_value(cdc::kTableId);
 

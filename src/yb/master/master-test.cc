@@ -1682,6 +1682,89 @@ TEST_F(MasterTest, TestFullTableName) {
   }
 }
 
+TEST_F(MasterTest, TestGetTableSchemaUsingReadTime) {
+  // Create a new namespace.
+  const NamespaceName other_ns_name = "testns";
+  NamespaceId other_ns_id;
+  ListNamespacesResponsePB namespaces;
+  {
+    CreateNamespaceResponsePB resp;
+    ASSERT_OK(CreateNamespace(other_ns_name, &resp));
+    other_ns_id = resp.id();
+  }
+  {
+    ASSERT_NO_FATALS(DoListAllNamespaces(&namespaces));
+    ASSERT_EQ(2 + kNumSystemNamespaces, namespaces.namespaces_size());
+    CheckNamespaces(
+        {
+            EXPECTED_DEFAULT_AND_SYSTEM_NAMESPACES,
+            std::make_tuple(other_ns_name, other_ns_id),
+        },
+        namespaces);
+  }
+
+  // Create a table with the defined new namespace.
+  const TableName kTableName = "testtb";
+  const Schema kTableSchema({ColumnSchema("key", INT32), ColumnSchema("value_1", INT32)}, 1);
+  ASSERT_OK(CreateTable(other_ns_name, kTableName, kTableSchema));
+
+  ListTablesResponsePB tables;
+  ASSERT_NO_FATALS(DoListAllTables(&tables));
+  ASSERT_EQ(1 + kNumSystemTables, tables.tables_size());
+  CheckTables(
+      {std::make_tuple(kTableName, other_ns_name, other_ns_id, USER_TABLE_RELATION),
+       EXPECTED_SYSTEM_TABLES},
+      tables);
+
+  TableId table_id;
+  for (int i = 0; i < tables.tables_size(); ++i) {
+    if (tables.tables(i).name() == kTableName) {
+      table_id = tables.tables(i).id();
+      break;
+    }
+  }
+  uint64_t update_time;
+  // mini_master_->master()->clock()->Now().ToUint64();
+
+  ASSERT_FALSE(table_id.empty()) << "Couldn't get table id for table " << kTableName;
+  // Alter the table
+  {
+    LOG(INFO) << "suresh: Alter table is called ......";
+    AlterTableRequestPB req;
+    AlterTableResponsePB resp;
+    req.mutable_table()->set_table_name(kTableName);
+    req.mutable_table()->set_table_id(table_id);
+    // req.mutable_table()->set_(table_id);
+    req.mutable_table()->mutable_namespace_()->set_name(other_ns_name);
+    // req.add_alter_schema_steps()->mutable_set_column_pg_type()->set_name("value_2");
+    // col->set_name("value_2");
+    ColumnSchemaToPB(
+        ColumnSchema("value_2", INT32),
+        req.add_alter_schema_steps()->mutable_add_column()->mutable_schema());
+
+    ASSERT_OK(proxy_ddl_->AlterTable(req, &resp, ResetAndGetController()));
+    SCOPED_TRACE(resp.DebugString());
+    ASSERT_TRUE(resp.has_error());
+    update_time  = mini_master_->master()->clock()->Now().ToUint64();
+  }
+
+  // Check GetTableSchema().
+  {
+    GetTableSchemaRequestPB req;
+    GetTableSchemaResponsePB resp;
+    req.mutable_table()->set_table_name(kTableName);
+    req.mutable_table()->set_table_id(table_id);
+    req.set_read_time(update_time);
+    req.mutable_table()->mutable_namespace_()->set_name(other_ns_name);
+
+    // Check the request.
+    ASSERT_OK(proxy_ddl_->GetTableSchema(req, &resp, ResetAndGetController()));
+    for (auto ech_col : resp.schema().columns()) {
+      LOG(INFO) << "suresh: ech_col name: " << ech_col.name();
+    }
+  }
+}
+
 TEST_F(MasterTest, TestGetTableSchema) {
   // Create a new namespace.
   const NamespaceName other_ns_name = "testns";

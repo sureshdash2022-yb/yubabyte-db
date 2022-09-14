@@ -296,6 +296,7 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
   }
   auto create_table_time = master_->clock()->Now();
   LOG(INFO) << "suresh: create table time: " << create_table_time.ToString();
+  auto table_update_1_time = master_->clock()->Now().ToUint64();
 
   // Verify it showed up.
   loader->Reset();
@@ -325,10 +326,10 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
 
     l.Commit();
   }
-  auto table_update_1_time = master_->clock()->Now();
+  // ReadHybridTime::SingleTime(create_table_time)
   Schema schema_from_func;
   ASSERT_OK(sys_catalog->GetTableSchema(
-      "", ReadHybridTime::SingleTime(create_table_time), &schema_from_func));
+      table_id, ReadHybridTime::FromUint64(table_update_1_time), &schema_from_func));
 
   for (auto& ech_col_name : schema_from_func.column_names()) {
     LOG(INFO) << "suresh: Using GetTableSchema alter col_name: " << ech_col_name;
@@ -355,7 +356,8 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
   loader->Reset();
 
   // loader->read_time.read = ReadHybridTime::Max().read;
-  loader->read_time = ReadHybridTime::SingleTime(table_update_1_time);
+ // loader->read_time = ReadHybridTime::SingleTime(table_update_1_time);
+  loader->read_time = ReadHybridTime::FromUint64(table_update_1_time);
   // loader->read_time = ReadHybridTime::Max();
 
   for (auto& ech_col_name : schema_from_sys_2.column_names()) {

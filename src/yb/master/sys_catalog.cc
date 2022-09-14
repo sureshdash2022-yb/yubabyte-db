@@ -744,7 +744,7 @@ Status SysCatalogTable::GetTableSchema(
   ReadHybridTime read_time = read_hybrid_time ? read_hybrid_time : ReadHybridTime::Max();
   const Schema& schema = doc_read_context_->schema;
   auto iter = VERIFY_RESULT(tablet->NewRowIterator(
-      schema.CopyWithoutColumnIds(), read_time, /* table_id= */ table_id, CoarseTimePoint::max(),
+      schema.CopyWithoutColumnIds(), read_time, /* table_id= */ "", CoarseTimePoint::max(),
       tablet::AllowBootstrappingState::kTrue));
   docdb::DocRowwiseIterator* doc_iter = down_cast<docdb::DocRowwiseIterator*>(iter.get());
 
@@ -774,17 +774,24 @@ Status SysCatalogTable::GetTableSchema(
     RETURN_NOT_OK(value_map.GetValue(schema.column_id(metadata_col_idx), &metadata));
     SCHECK_EQ(metadata.type(), InternalType::kBinaryValue, Corruption, "Found wrong metadata type");
     const Slice& binary_value = metadata.binary_value();
+    const Slice& entry_id_value = entry_id.binary_value();
+    string entry_id_name;
+
+    LOG(INFO) << "suresh: entry_id.string_value()" <<  entry_id_value.ToBuffer()
+             << " table_id: " << table_id;
     SysTablesEntryPB metadata_pb;
     // TODO: item id in log.
     RETURN_NOT_OK_PREPEND(
         pb_util::ParseFromArray(&metadata_pb, binary_value.data(), binary_value.size()),
         "Unable to parse metadata field for item id");
-
-    TableInfo* table = new TableInfo(table_id);
-    auto l = table->LockForWrite();
-    l.mutable_data()->pb.CopyFrom(metadata_pb);
-    RETURN_NOT_OK(SchemaFromPB(l->schema(), current_schema));
-    l.Commit();
+    if (table_id == entry_id_value.ToBuffer()) {
+      TableInfo* table = new TableInfo(table_id);
+      auto l = table->LockForWrite();
+      l.mutable_data()->pb.CopyFrom(metadata_pb);
+      RETURN_NOT_OK(SchemaFromPB(l->schema(), current_schema));
+      l.Commit();
+      break;
+    }
   }
   return Status::OK();
 }

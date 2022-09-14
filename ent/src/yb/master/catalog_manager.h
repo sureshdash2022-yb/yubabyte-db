@@ -119,6 +119,9 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
                                  CreateCDCStreamResponsePB* resp,
                                  rpc::RpcContext* rpc);
 
+  Status GetTableSchemaFromSys(
+    const TableId& table_id, const ReadHybridTime read_hybrid_time, Schema* schema);
+
   // Delete the specified CDCStream.
   Status DeleteCDCStream(const DeleteCDCStreamRequestPB* req,
                          DeleteCDCStreamResponsePB* resp,

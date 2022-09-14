@@ -164,6 +164,7 @@ message ListTablesResponsePB {
 
 message GetTableSchemaRequestPB {
   required TableIdentifierPB table = 1;
+  optional  int64 read_time = 2;
 }
 
 message GetTableSchemaResponsePB {
