@@ -1368,6 +1368,10 @@
           "description" : "Disable checksum",
           "type" : "boolean"
         },
+        "disableMultipart" : {
+          "description" : "Disable multipart upload",
+          "type" : "boolean"
+        },
         "disableParallelism" : {
           "description" : "Don't add -m flag during gsutil upload dir command",
           "type" : "boolean"
@@ -1718,6 +1722,10 @@
         },
         "disableChecksum" : {
           "description" : "Disable checksum",
+          "type" : "boolean"
+        },
+        "disableMultipart" : {
+          "description" : "Disable multipart upload",
           "type" : "boolean"
         },
         "disableParallelism" : {
@@ -4337,6 +4345,10 @@
           "description" : "Disable checksum",
           "type" : "boolean"
         },
+        "disableMultipart" : {
+          "description" : "Disable multipart upload",
+          "type" : "boolean"
+        },
         "disableParallelism" : {
           "description" : "Don't add -m flag during gsutil upload dir command",
           "type" : "boolean"
@@ -6002,6 +6014,10 @@
         },
         "disableChecksum" : {
           "description" : "Disable checksum",
+          "type" : "boolean"
+        },
+        "disableMultipart" : {
+          "description" : "Disable multipart upload",
           "type" : "boolean"
         },
         "enableVerboseLogs" : {
@@ -16619,6 +16635,43 @@
           "apiKeyAuth" : [ ]
         } ],
         "summary" : "Update a node",
+        "tags" : [ "Node instances" ]
+      }
+    },
+    "/api/v1/customers/{cUUID}/universes/{universeUUID}/nodes/{nodeName}/details" : {
+      "get" : {
+        "description" : "",
+        "operationId" : "getNodeDetails",
+        "parameters" : [ {
+          "format" : "uuid",
+          "in" : "path",
+          "name" : "cUUID",
+          "required" : true,
+          "type" : "string"
+        }, {
+          "format" : "uuid",
+          "in" : "path",
+          "name" : "universeUUID",
+          "required" : true,
+          "type" : "string"
+        }, {
+          "in" : "path",
+          "name" : "nodeName",
+          "required" : true,
+          "type" : "string"
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "successful operation",
+            "schema" : {
+              "$ref" : "#/definitions/NodeDetailsResp"
+            }
+          }
+        },
+        "security" : [ {
+          "apiKeyAuth" : [ ]
+        } ],
+        "summary" : "Get node details",
         "tags" : [ "Node instances" ]
       }
     },
