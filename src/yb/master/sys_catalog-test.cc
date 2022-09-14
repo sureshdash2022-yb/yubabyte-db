@@ -356,7 +356,7 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
   loader->Reset();
 
   // loader->read_time.read = ReadHybridTime::Max().read;
- // loader->read_time = ReadHybridTime::SingleTime(table_update_1_time);
+  // loader->read_time = ReadHybridTime::SingleTime(table_update_1_time);
   loader->read_time = ReadHybridTime::FromUint64(table_update_1_time);
   // loader->read_time = ReadHybridTime::Max();
 
