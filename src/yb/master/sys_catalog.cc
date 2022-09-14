@@ -773,22 +773,16 @@ Status SysCatalogTable::GetTableSchema(
     RETURN_NOT_OK(value_map.GetValue(schema.column_id(entry_id_col_idx), &entry_id));
     RETURN_NOT_OK(value_map.GetValue(schema.column_id(metadata_col_idx), &metadata));
     SCHECK_EQ(metadata.type(), InternalType::kBinaryValue, Corruption, "Found wrong metadata type");
-    // RETURN_NOT_OK(callback(entry_id.binary_value(), metadata.binary_value()));
     const Slice& binary_value = metadata.binary_value();
     SysTablesEntryPB metadata_pb;
-    // typename PersistentTableInfo::data_type binary_value;
     // TODO: item id in log.
     RETURN_NOT_OK_PREPEND(
         pb_util::ParseFromArray(&metadata_pb, binary_value.data(), binary_value.size()),
         "Unable to parse metadata field for item id");
 
-    //metadata_pb->()->set_binary_value(binary_value.cdata(), binary_value.size());
-
     TableInfo* table = new TableInfo(table_id);
     auto l = table->LockForWrite();
     l.mutable_data()->pb.CopyFrom(metadata_pb);
-    // metadataPB.DecodeFrom(metadata.binary_value());
-    // l.mutable_data()->pb.CopyFrom(metadataPB);
     RETURN_NOT_OK(SchemaFromPB(l->schema(), current_schema));
     l.Commit();
   }
