@@ -61,7 +61,6 @@ class Visitor : public VisitorBase {
 
   int entry_type() const { return PersistentDataEntryClass::type(); }
 
-  // ReadHybridTime read_hybrid_time() const {return PersistentDataEntryClass::ReadHybridTime();}
 
  protected:
   virtual Status Visit(

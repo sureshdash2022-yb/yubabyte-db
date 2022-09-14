@@ -186,6 +186,7 @@ Status EnumerateSysCatalog(
   const auto metadata_col_idx = VERIFY_RESULT(schema.ColumnIndexByName(
       kSysCatalogTableColMetadata));
 
+  LOG(INFO) << "suresh: EnumerateSysCatalog entry_type: " << int(entry_type);
   QLConditionPB cond;
   cond.set_op(QL_OP_AND);
   QLAddInt8Condition(&cond, schema.column_id(type_col_idx), QL_OP_EQUAL, entry_type);

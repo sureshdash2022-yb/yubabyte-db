@@ -75,6 +75,7 @@ class TestTableLoader : public Visitor<PersistentTableInfo> {
 
   Status Visit(const std::string& table_id, const SysTablesEntryPB& metadata) override {
     // Setup the table info
+    LOG(INFO) << "suresh: Inside TestTableLoader: Visit.........:";
     TableInfo *table = new TableInfo(table_id);
     auto l = table->LockForWrite();
     l.mutable_data()->pb.CopyFrom(metadata);
@@ -278,8 +279,6 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
   ASSERT_EQ(kNumSystemTables, loader->tables.size());
 
   // Create new table.
-  auto create_table_time = master_->clock()->Now();
-  LOG(INFO) << "suresh: create table time: " << create_table_time.ToString();
   const std::string table_id = "test_table_id";
   scoped_refptr<TableInfo> table = master_->catalog_manager()->NewTableInfo(table_id);
   {
@@ -295,6 +294,8 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
     ASSERT_OK(sys_catalog->Upsert(kLeaderTerm, table));
     l.Commit();
   }
+  auto create_table_time = master_->clock()->Now();
+  LOG(INFO) << "suresh: create table time: " << create_table_time.ToString();
 
   // Verify it showed up.
   loader->Reset();
@@ -325,6 +326,13 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
     l.Commit();
   }
   auto table_update_1_time = master_->clock()->Now();
+  Schema schema_from_func;
+  ASSERT_OK(sys_catalog->GetTableSchema(
+      "", ReadHybridTime::SingleTime(create_table_time), &schema_from_func));
+
+  for (auto& ech_col_name : schema_from_func.column_names()) {
+    LOG(INFO) << "suresh: Using GetTableSchema alter col_name: " << ech_col_name;
+  }
 
   // Alter the table by adding 2 clomns
   {
