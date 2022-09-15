@@ -120,7 +120,8 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
                                  rpc::RpcContext* rpc);
 
   Status GetTableSchemaFromSysCatalog(
-      const GetTableSchemaFromSysCatalogRequestPB* req, GetTableSchemaFromSysCatalogResponsePB* resp, rpc::RpcContext* rpc);
+      const GetTableSchemaFromSysCatalogRequestPB* req,
+      GetTableSchemaFromSysCatalogResponsePB* resp, rpc::RpcContext* rpc);
 
   // Delete the specified CDCStream.
   Status DeleteCDCStream(const DeleteCDCStreamRequestPB* req,
