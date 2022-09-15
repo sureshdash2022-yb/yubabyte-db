@@ -3689,6 +3689,46 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWhenAFollowerIsUna
   // be greater than or equal to the previously recorded last_active_time.
   CompareExpirationTime(tablets[0].tablet_id(), first_expiry_time, first_leader_index, true);
 }
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAddColumnsWithImplictTransaction)) {
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRows(1 /* start */, 10 /* end */, &test_cluster_));
+
+  #if 0
+  table = ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+  ASSERT_OK(WriteRows(11 /* start */, 20 /* end */, &test_cluster_, {kValue2ColumnName}));
+#endif
+  GetChangesResponsePB change_resp;
+  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  for (uint32_t idx = 0; idx < record_size; idx++) {
+    const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
+    std::stringstream s;
+    for (int jdx = 0; jdx < record.row_message().new_tuple_size(); jdx++) {
+      s << " " << record.row_message().new_tuple(jdx).datum_int32();
+    }
+    LOG(INFO) << "row: " << idx << " : " << s.str();
+  }
+  ASSERT_GE(record_size, 10);
+  LOG(INFO) << "Total records read by GetChanges call, after alter table: " << record_size;
+}
 
 }  // namespace enterprise
 }  // namespace cdc

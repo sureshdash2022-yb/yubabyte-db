@@ -1382,7 +1382,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     status = GetChangesForCDCSDK(
         req->stream_id(), req->tablet_id(), cdc_sdk_op_id, record, tablet_peer, mem_tracker,
         *enum_map_result, &msgs_holder, resp, &commit_timestamp, &cached_schema,
-        &last_streamed_op_id, &last_readable_index, get_changes_deadline);
+        &last_streamed_op_id, client(), &last_readable_index, get_changes_deadline);
     // This specific error from the docdb_pgapi layer is used to identify enum cache entry is out of
     // date, hence we need to repopulate.
     if (status.IsCacheMissError()) {
@@ -1400,7 +1400,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
       status = GetChangesForCDCSDK(
           req->stream_id(), req->tablet_id(), cdc_sdk_op_id, record, tablet_peer, mem_tracker,
           *enum_map_result, &msgs_holder, resp, &commit_timestamp, &cached_schema,
-          &last_streamed_op_id, &last_readable_index, get_changes_deadline);
+          &last_streamed_op_id, client(), &last_readable_index, get_changes_deadline);
     }
 
     impl_->UpdateCDCStateMetadata(

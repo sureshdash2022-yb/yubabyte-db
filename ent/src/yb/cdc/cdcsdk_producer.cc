@@ -658,6 +658,7 @@ Status GetChangesForCDCSDK(
     std::string* commit_timestamp,
     std::shared_ptr<Schema>* cached_schema,
     OpId* last_streamed_op_id,
+    client::YBClient* client,
     int64_t* last_readable_opid_index,
     const CoarseTimePoint deadline) {
   OpId op_id{from_op_id.term(), from_op_id.index()};
@@ -827,6 +828,17 @@ Status GetChangesForCDCSDK(
         } else {
           current_schema = **cached_schema;
         }
+        auto result = client->GetTableSchemaWithReadTime(
+            tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
+        Schema current_schema;
+        if (result.ok()) {
+          current_schema = *result;
+          for (auto& ech_col : current_schema.column_names()) {
+            LOG(INFO) << "suresh: col name: " << ech_col;
+          }
+
+        }
+
 
         switch (msg->op_type()) {
           case consensus::OperationType::UPDATE_TRANSACTION_OP:

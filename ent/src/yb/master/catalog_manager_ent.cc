@@ -3403,10 +3403,21 @@ Status CatalogManager::BackfillMetadataForCDC(
     return Status::OK();
   }
 }
-Status CatalogManager::GetTableSchemaFromSys(
-    const TableId& table_id, const ReadHybridTime read_hybrid_time, Schema* schema) {
-  return sys_catalog_->GetTableSchema(table_id, read_hybrid_time, schema);
+
+Status CatalogManager::GetTableSchemaFromSysCatalog(
+    const GetTableSchemaFromSysCatalogRequestPB* req, GetTableSchemaFromSysCatalogResponsePB* resp,
+    rpc::RpcContext* rpc) {
+  if (req->IsInitialized() && req->has_read_time() > 0) {
+    Schema schema;
+    LOG(INFO) << "suresh: Get table schema for table_id: " << req->table().table_id();
+    auto status = sys_catalog_->GetTableSchema(
+        req->table().table_id(), ReadHybridTime::FromUint64(req->read_time()), &schema);
+    SchemaToPB(schema, resp->mutable_schema());
+    return status;
+  }
+  return Status::OK();
 }
+
 Status CatalogManager::CreateCDCStream(
     const CreateCDCStreamRequestPB* req, CreateCDCStreamResponsePB* resp, rpc::RpcContext* rpc) {
   LOG(INFO) << "CreateCDCStream from " << RequestorString(rpc) << ": " << req->ShortDebugString();

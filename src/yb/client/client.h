@@ -582,6 +582,8 @@ class YBClient {
 
   Result<std::unordered_map<uint32_t, string>> GetPgEnumOidLabelMap(const NamespaceName& ns_name);
 
+  Result<Schema> GetTableSchemaWithReadTime(const TableId& table_id, const uint64_t read_time);
+
   // List all running tablets' uuids for this table.
   // 'tablets' is appended to only on success.
   Status GetTablets(

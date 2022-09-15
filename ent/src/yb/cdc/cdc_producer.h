@@ -76,6 +76,7 @@ Status GetChangesForCDCSDK(
     std::string* commit_timestamp,
     std::shared_ptr<Schema>* cached_schema,
     OpId* last_streamed_op_id,
+    client::YBClient* client,
     int64_t* last_readable_opid_index = nullptr,
     const CoarseTimePoint deadline = CoarseTimePoint::max());
 
