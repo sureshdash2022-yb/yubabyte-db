@@ -327,7 +327,8 @@ service MasterReplication {
   rpc UpdateCDCStream (UpdateCDCStreamRequestPB) returns (UpdateCDCStreamResponsePB);
   rpc IsBootstrapRequired (IsBootstrapRequiredRequestPB) returns (IsBootstrapRequiredResponsePB);
   rpc GetUDTypeMetadata(GetUDTypeMetadataRequestPB) returns (GetUDTypeMetadataResponsePB);
-  rpc GetTableSchemaFromSysCatalog(GetTableSchemaFromSysCatalogRequestPB) returns (GetTableSchemaFromSysCatalogResponsePB);
+  rpc GetTableSchemaFromSysCatalog(GetTableSchemaFromSysCatalogRequestPB)
+      returns(GetTableSchemaFromSysCatalogResponsePB);
   rpc WaitForReplicationDrain (WaitForReplicationDrainRequestPB)
       returns (WaitForReplicationDrainResponsePB);
 
