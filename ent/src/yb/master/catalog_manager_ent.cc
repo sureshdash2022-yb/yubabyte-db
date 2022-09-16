@@ -3407,14 +3407,26 @@ Status CatalogManager::BackfillMetadataForCDC(
 Status CatalogManager::GetTableSchemaFromSysCatalog(
     const GetTableSchemaFromSysCatalogRequestPB* req, GetTableSchemaFromSysCatalogResponsePB* resp,
     rpc::RpcContext* rpc) {
-  if (req->IsInitialized() && req->has_read_time() > 0) {
-    Schema schema;
-    LOG(INFO) << "suresh: Get table schema for table_id: " << req->table().table_id();
-    auto status = sys_catalog_->GetTableSchema(
-        req->table().table_id(), ReadHybridTime::FromUint64(req->read_time()), &schema);
-    SchemaToPB(schema, resp->mutable_schema());
-    return status;
+  if (!req->has_read_time()) {
+    return STATUS(
+        InvalidArgument, "Read hybrid time is not specified.", req->ShortDebugString(),
+        MasterError(MasterErrorPB::INVALID_REQUEST));
   }
+  Schema schema;
+  uint32_t schema_version;
+  VLOG(1) << "Get the table: " << req->table().table_id()
+          << " specific schema from system catalog with read hybrid time: " << req->read_time();
+  auto status = sys_catalog_->GetTableSchema(
+      req->table().table_id(), ReadHybridTime::FromUint64(req->read_time()), &schema,
+      &schema_version);
+  if (!status.ok()) {
+    Status s = STATUS_SUBSTITUTE(
+        NotFound, "Could not find specific schema from system catalog for request $0.",
+        req->DebugString());
+    return SetupError(resp->mutable_error(), MasterErrorPB::INVALID_SCHEMA, s);
+  }
+  SchemaToPB(schema, resp->mutable_schema());
+  resp->set_version(schema_version);
   return Status::OK();
 }
 

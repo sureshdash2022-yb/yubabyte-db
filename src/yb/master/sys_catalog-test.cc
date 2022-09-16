@@ -328,8 +328,12 @@ TEST_F(SysCatalogTest, TestSysCatalogTableSchemaUpdate) {
   }
   // ReadHybridTime::SingleTime(create_table_time)
   Schema schema_from_func;
+  uint32_t schema_version;
   ASSERT_OK(sys_catalog->GetTableSchema(
-      table_id, ReadHybridTime::FromUint64(table_update_1_time), &schema_from_func));
+      table_id,
+      ReadHybridTime::FromUint64(table_update_1_time),
+      &schema_from_func,
+      &schema_version));
 
   for (auto& ech_col_name : schema_from_func.column_names()) {
     LOG(INFO) << "suresh: Using GetTableSchema alter col_name: " << ech_col_name;

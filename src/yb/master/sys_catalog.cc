@@ -735,7 +735,7 @@ void SysCatalogTable::InitLocalRaftPeerPB() {
 }
 
 Status SysCatalogTable::GetTableSchema(
-    const TableId& table_id, const ReadHybridTime read_hybrid_time, Schema* current_schema) {
+    const TableId& table_id, const ReadHybridTime read_hybrid_time, Schema* current_schema, uint32_t* schema_version) {
   auto tablet = tablet_peer()->shared_tablet();
   if (!tablet) {
     return STATUS(ShutdownInProgress, "SysConfig is shutting down.");
@@ -762,6 +762,7 @@ Status SysCatalogTable::GetTableSchema(
       &cond, nullptr /* if_req */, rocksdb::kDefaultQueryId);
   RETURN_NOT_OK(doc_iter->Init(spec));
 
+  bool table_schema_found = false;
   while (VERIFY_RESULT(doc_iter->HasNext())) {
     QLTableRow value_map;
     QLValue found_entry_type, entry_id, metadata;
@@ -777,21 +778,28 @@ Status SysCatalogTable::GetTableSchema(
     const Slice& entry_id_value = entry_id.binary_value();
     string entry_id_name;
 
-    LOG(INFO) << "suresh: entry_id.string_value()" <<  entry_id_value.ToBuffer()
-             << " table_id: " << table_id;
     SysTablesEntryPB metadata_pb;
-    // TODO: item id in log.
     RETURN_NOT_OK_PREPEND(
         pb_util::ParseFromArray(&metadata_pb, binary_value.data(), binary_value.size()),
-        "Unable to parse metadata field for item id");
+        "Unable to parse metadata field for table_id: " + entry_id_value.ToBuffer());
     if (table_id == entry_id_value.ToBuffer()) {
       TableInfo* table = new TableInfo(table_id);
       auto l = table->LockForWrite();
       l.mutable_data()->pb.CopyFrom(metadata_pb);
-      RETURN_NOT_OK(SchemaFromPB(l->schema(), current_schema));
+      RETURN_NOT_OK(SchemaFromPB(l.mutable_data()->pb.schema(), current_schema));
+      *schema_version  = l.mutable_data()->pb.version();
       l.Commit();
+      VLOG(1) << "Found table_id: " << entry_id_value.ToBuffer()
+              << " specific schema version from system catalog table: "
+              << l->schema().DebugString();
+      table_schema_found = true;
       break;
     }
+  }
+  if (!table_schema_found) {
+    return STATUS_FORMAT(
+        NotFound, "Failed to get specific schema version for table: $0 from system catalog",
+        table_id);
   }
   return Status::OK();
 }

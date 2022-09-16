@@ -811,7 +811,23 @@ Status GetChangesForCDCSDK(
         last_seen_op_id.index = msg->id().index();
 
         if (!schema_streamed && !(**cached_schema).initialized()) {
-          current_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
+          // current_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
+          auto result = client->GetTableSchemaWithReadTime(
+              tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
+          if (!result.ok()) {
+            LOG(ERROR)
+                << "Failed to get the specific schema version from system catalog for table: "
+                << tablet_peer->tablet()->metadata()->table_name();
+            return STATUS_FORMAT(
+                InternalError,
+                "Failed to get the specific schema version from system catalog for table: $0",
+                tablet_peer->tablet()->metadata()->table_name());
+          }
+          current_schema = *result;
+          for (auto& ech_col : current_schema.column_names()) {
+            LOG(INFO) << "suresh: col name: " << ech_col;
+          }
+
           string table_name = tablet_peer->tablet()->metadata()->table_name();
           schema_streamed = true;
 
@@ -828,17 +844,6 @@ Status GetChangesForCDCSDK(
         } else {
           current_schema = **cached_schema;
         }
-        auto result = client->GetTableSchemaWithReadTime(
-            tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
-        Schema current_schema;
-        if (result.ok()) {
-          current_schema = *result;
-          for (auto& ech_col : current_schema.column_names()) {
-            LOG(INFO) << "suresh: col name: " << ech_col;
-          }
-
-        }
-
 
         switch (msg->op_type()) {
           case consensus::OperationType::UPDATE_TRANSACTION_OP:

@@ -1137,7 +1137,6 @@ Result<std::unique_ptr<docdb::YQLRowwiseIteratorIf>> Tablet::NewRowIterator(
   const auto read_time = read_hybrid_time
       ? read_hybrid_time
       : ReadHybridTime::SingleTime(VERIFY_RESULT(SafeTime(RequireLease::kFalse)));
-  LOG(INFO) << "suresh: read_time in NewRowIterator: " << read_time.read;
   auto result = std::make_unique<DocRowwiseIterator>(
       std::move(mapped_projection), *table_info->doc_read_context, txn_op_ctx,
       doc_db(), deadline, read_time, &pending_non_abortable_op_counter_);

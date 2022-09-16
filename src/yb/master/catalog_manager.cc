@@ -6313,14 +6313,14 @@ Status CatalogManager::GetTableSchemaInternal(const GetTableSchemaRequestPB* req
   TRACE("Looking up table");
   scoped_refptr<TableInfo> table = VERIFY_RESULT(FindTable(req->table()));
 
-  if (req->IsInitialized() && req->has_read_time() > 0) {
+  /*if (req->IsInitialized() && req->has_read_time() > 0) {
     Schema schema;
     LOG(INFO) << "suresh: Get table schema for table_id: " << req->table().table_id();
     auto status = sys_catalog_->GetTableSchema(
         req->table().table_id(), ReadHybridTime::FromUint64(req->read_time()), &schema);
     SchemaToPB(schema, resp->mutable_schema());
     return status;
-  }
+  }*/
   TRACE("Locking table");
   auto l = table->LockForRead();
   RETURN_NOT_OK(CatalogManagerUtil::CheckIfTableDeletedOrNotVisibleToClient(l, resp));
