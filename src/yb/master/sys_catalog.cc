@@ -735,7 +735,8 @@ void SysCatalogTable::InitLocalRaftPeerPB() {
 }
 
 Status SysCatalogTable::GetTableSchema(
-    const TableId& table_id, const ReadHybridTime read_hybrid_time, Schema* current_schema, uint32_t* schema_version) {
+    const TableId& table_id, const ReadHybridTime read_hybrid_time, Schema* current_schema,
+    uint32_t* schema_version) {
   auto tablet = tablet_peer()->shared_tablet();
   if (!tablet) {
     return STATUS(ShutdownInProgress, "SysConfig is shutting down.");
@@ -787,7 +788,7 @@ Status SysCatalogTable::GetTableSchema(
       auto l = table->LockForWrite();
       l.mutable_data()->pb.CopyFrom(metadata_pb);
       RETURN_NOT_OK(SchemaFromPB(l.mutable_data()->pb.schema(), current_schema));
-      *schema_version  = l.mutable_data()->pb.version();
+      *schema_version = l.mutable_data()->pb.version();
       l.Commit();
       VLOG(1) << "Found table_id: " << entry_id_value.ToBuffer()
               << " specific schema version from system catalog table: "
