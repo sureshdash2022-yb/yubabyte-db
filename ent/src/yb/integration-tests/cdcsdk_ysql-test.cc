@@ -3839,7 +3839,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAddColumnsWithExplictTr
   ASSERT_OK(test_client()->FlushTables(
       {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
       /* is_compaction = */ false));
-  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
   record_size = change_resp.cdc_sdk_proto_records_size();
   for (uint32_t idx = 0; idx < record_size; idx++) {
     const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
@@ -3952,7 +3953,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKDropColumnsWithImplictT
   ASSERT_EQ(tablets.size(), num_tablets);
   ASSERT_OK(WriteRows(11 /* start */, 21 /* end */, &test_cluster_, {kValue3ColumnName}));
 
-  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
   record_size = change_resp.cdc_sdk_proto_records_size();
   for (uint32_t idx = 0; idx < record_size; idx++) {
     const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
@@ -4020,7 +4022,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKDropColumnsWithExplictT
   ASSERT_OK(test_client()->FlushTables(
       {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
       /* is_compaction = */ false));
-  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
   record_size = change_resp.cdc_sdk_proto_records_size();
   for (uint32_t idx = 0; idx < record_size; idx++) {
     const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
@@ -4082,7 +4085,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKRenameColumnsWithImplic
   ASSERT_EQ(tablets.size(), num_tablets);
   ASSERT_OK(WriteRows(11 /* start */, 21 /* end */, &test_cluster_, {kValue3ColumnName}));
 
-  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
   record_size = change_resp.cdc_sdk_proto_records_size();
   for (uint32_t idx = 0; idx < record_size; idx++) {
     const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
@@ -4147,11 +4151,13 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKRenameColumnsWithExplic
 
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
   ASSERT_EQ(tablets.size(), num_tablets);
-  ASSERT_OK(WriteRowsHelper(11 /* start */, 21 /* end */, &test_cluster_, true, {kValue3ColumnName}));
+  ASSERT_OK(
+      WriteRowsHelper(11 /* start */, 21 /* end */, &test_cluster_, true, {kValue3ColumnName}));
   ASSERT_OK(test_client()->FlushTables(
       {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
       /* is_compaction = */ false));
-  change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
   record_size = change_resp.cdc_sdk_proto_records_size();
   for (uint32_t idx = 0; idx < record_size; idx++) {
     const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
