@@ -2670,7 +2670,8 @@ TEST_P(TwoDCTest, TestNonZeroLagMetricsWithoutGetChange) {
   std::shared_ptr<cdc::CDCTabletMetrics> metrics;
   ASSERT_OK(WaitFor(
       [&]() {
-        metrics = std::static_pointer_cast<cdc::CDCTabletMetrics>(cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablet_id}));
+        metrics = std::static_pointer_cast<cdc::CDCTabletMetrics>(
+            cdc_service->GetCDCTabletMetrics({"" /* UUID */, stream_id, tablet_id}));
         if (!metrics) {
           return false;
         }

@@ -3191,13 +3191,8 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
       tablet_metric->rpc_payload_bytes_responded->Increment(resp->ByteSize());
       // Get the physical time of the last committed record on producer.
       auto last_replicated_micros = GetLastReplicatedTime(tablet_peer);
-      /*if (resp->cdc_sdk_proto_records_size() > 0) {
-        tablet_metric->cdcsdk_sent_lag_micros->set_value(
-            last_replicated_micros - last_record_micros);
-      } else*/ {
-        tablet_metric->async_replication_sent_lag_micros->set_value(
-            last_replicated_micros - last_record_micros);
-      }
+      tablet_metric->async_replication_sent_lag_micros->set_value(
+          last_replicated_micros - last_record_micros);
 
       auto first_record_micros = HybridTime(first_record_time).GetPhysicalValueMicros();
       tablet_metric->last_checkpoint_physicaltime->set_value(first_record_micros);
@@ -3205,13 +3200,8 @@ void CDCServiceImpl::UpdateCDCTabletMetrics(
       // the previous caught-up time, or to the last committed record time on consumer.
       tablet_metric->last_caughtup_physicaltime->set_value(
           std::max(tablet_metric->last_caughtup_physicaltime->value(), first_record_micros));
-      /*if (resp->cdc_sdk_proto_records_size() > 0) {
-        tablet_metric->cdcsdk_committed_lag_micros->set_value(
-            last_replicated_micros - first_record_micros);
-      } else */{
-        tablet_metric->async_replication_committed_lag_micros->set_value(
-            last_replicated_micros - first_record_micros);
-      }
+      tablet_metric->async_replication_committed_lag_micros->set_value(
+          last_replicated_micros - first_record_micros);
     } else {
       tablet_metric->rpc_heartbeats_responded->Increment();
       // If there are no more entries to be read, that means we're caught up.
@@ -3319,7 +3309,6 @@ std::shared_ptr<void> CDCServiceImpl::GetCDCTabletMetrics(
     tablet->AddAdditionalMetadata(key, metrics_raw);
   }
   return metrics_raw;
-  //return std::static_pointer_cast<CDCTabletMetrics>(metrics_raw);
 }
 
 void CDCServiceImpl::RemoveCDCTabletMetrics(
@@ -3477,8 +3466,8 @@ void CDCServiceImpl::IsBootstrapRequired(const IsBootstrapRequiredRequestPB* req
       if (result.ok()) {
         op_id = *result;
       }
-
-      tablet_metric = std::static_pointer_cast<CDCTabletMetrics>(GetCDCTabletMetrics(producer_tablet, tablet_peer));
+      tablet_metric = std::static_pointer_cast<CDCTabletMetrics>(
+          GetCDCTabletMetrics(producer_tablet, tablet_peer));
     }
 
     auto log = tablet_peer->log();
