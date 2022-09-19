@@ -968,7 +968,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     return last_active_time;
   }
 
-  void ValidateColumnCounts(GetChangesResponsePB& resp, uint32_t excepted_column_counts) {
+  void ValidateColumnCounts(const GetChangesResponsePB& resp, uint32_t excepted_column_counts) {
     uint32_t record_size = resp.cdc_sdk_proto_records_size();
     for (uint32_t idx = 0; idx < record_size; idx++) {
       const CDCSDKProtoRecordPB record = resp.cdc_sdk_proto_records(idx);
@@ -978,9 +978,9 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     }
   }
 
-  void ValidateInsertCounts(GetChangesResponsePB& resp, uint32_t excepted_insert_counts) {
+  void ValidateInsertCounts(const GetChangesResponsePB& resp, uint32_t excepted_insert_counts) {
     uint32_t record_size = resp.cdc_sdk_proto_records_size();
-    uint32_t insert_count  = 0 ;
+    uint32_t insert_count = 0;
     for (uint32_t idx = 0; idx < record_size; idx++) {
       const CDCSDKProtoRecordPB record = resp.cdc_sdk_proto_records(idx);
       if (record.row_message().op() == RowMessage::INSERT) {
