@@ -2103,7 +2103,7 @@ Result<std::vector<YBTableName>> YBClient::ListUserTables(
   return result;
 }
 
-Result<Schema> YBClient::GetTableSchemaWithReadTime(
+Result<pair<Schema, uint32_t>> YBClient::GetTableSchemaFromSysCatalog(
     const TableId& table_id, const uint64_t read_time) {
   master::GetTableSchemaFromSysCatalogRequestPB req;
   master::GetTableSchemaFromSysCatalogResponsePB resp;
@@ -2114,19 +2114,9 @@ Result<Schema> YBClient::GetTableSchemaWithReadTime(
 
   CALL_SYNC_LEADER_MASTER_RPC_EX(Replication, req, resp, GetTableSchemaFromSysCatalog);
   RETURN_NOT_OK(SchemaFromPB(resp.schema(), &current_schema));
+  VLOG(1) << "For table_id " << table_id << " found specific schema version from system catalog.";
 
-#if 0
-  VLOG(1) << "For namespace " << ns_name << " found " << resp.enums_size() << " enums";
-
-  std::unordered_map<uint32_t, string> enum_map;
-  for (int i = 0; i < resp.enums_size(); i++) {
-    const master::PgEnumInfoPB& enum_info = resp.enums(i);
-    VLOG(1) << "Enum oid " << enum_info.oid() << " enum label: " << enum_info.label();
-    enum_map.insert({enum_info.oid(), enum_info.label()});
-  }
-  return enum_map;
-#endif
-  return current_schema;
+  return make_pair(current_schema, resp.version());
 }
 
 Result<std::unordered_map<uint32_t, string>> YBClient::GetPgEnumOidLabelMap(

@@ -657,6 +657,7 @@ Status GetChangesForCDCSDK(
     GetChangesResponsePB* resp,
     std::string* commit_timestamp,
     std::shared_ptr<Schema>* cached_schema,
+    uint32_t* cached_schema_version,
     OpId* last_streamed_op_id,
     client::YBClient* client,
     int64_t* last_readable_opid_index,
@@ -810,9 +811,10 @@ Status GetChangesForCDCSDK(
         last_seen_op_id.term = msg->id().term();
         last_seen_op_id.index = msg->id().index();
 
-        if (!schema_streamed && !(**cached_schema).initialized()) {
+        if ((!schema_streamed && !(**cached_schema).initialized()) ||
+            (*cached_schema_version != read_ops.header_schema_version)) {
           // current_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
-          auto result = client->GetTableSchemaWithReadTime(
+          auto result = client->GetTableSchemaFromSysCatalog(
               tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
           if (!result.ok()) {
             LOG(ERROR)
@@ -823,7 +825,8 @@ Status GetChangesForCDCSDK(
                 "Failed to get the specific schema version from system catalog for table: $0",
                 tablet_peer->tablet()->metadata()->table_name());
           }
-          current_schema = *result;
+          current_schema = result->first;
+          *cached_schema_version = result->second;
           for (auto& ech_col : current_schema.column_names()) {
             LOG(INFO) << "suresh: col name: " << ech_col;
           }
@@ -893,6 +896,7 @@ Status GetChangesForCDCSDK(
             RETURN_NOT_OK(SchemaFromPB(msg->change_metadata_request().schema(), &current_schema));
             string table_name = tablet_peer->tablet()->metadata()->table_name();
             *cached_schema = std::make_shared<Schema>(std::move(current_schema));
+            *cached_schema_version = msg->change_metadata_request().schema_version();
             if ((resp->cdc_sdk_proto_records_size() > 0 &&
                  resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
                          .row_message()
