@@ -88,6 +88,7 @@ DECLARE_uint64(consensus_max_batch_size_bytes);
 DECLARE_uint64(aborted_intent_cleanup_ms);
 DECLARE_int32(cdc_min_replicated_index_considered_stale_secs);
 DECLARE_int32(log_min_seconds_to_retain);
+DECLARE_int32(timestamp_history_retention_interval_sec);
 
 namespace yb {
 
@@ -965,6 +966,28 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
     auto last_active_time = VERIFY_RESULT(CheckedStoInt<int64_t>(last_active_time_string));
     return last_active_time;
+  }
+
+  void ValidateColumnCounts(GetChangesResponsePB& resp, uint32_t excepted_column_counts) {
+    uint32_t record_size = resp.cdc_sdk_proto_records_size();
+    for (uint32_t idx = 0; idx < record_size; idx++) {
+      const CDCSDKProtoRecordPB record = resp.cdc_sdk_proto_records(idx);
+      if (record.row_message().op() == RowMessage::INSERT) {
+        ASSERT_EQ(record.row_message().new_tuple_size(), excepted_column_counts);
+      }
+    }
+  }
+
+  void ValidateInsertCounts(GetChangesResponsePB& resp, uint32_t excepted_insert_counts) {
+    uint32_t record_size = resp.cdc_sdk_proto_records_size();
+    uint32_t insert_count  = 0 ;
+    for (uint32_t idx = 0; idx < record_size; idx++) {
+      const CDCSDKProtoRecordPB record = resp.cdc_sdk_proto_records(idx);
+      if (record.row_message().op() == RowMessage::INSERT) {
+        insert_count += 1;
+      }
+    }
+    ASSERT_EQ(insert_count, excepted_insert_counts);
   }
 };
 
@@ -4176,7 +4199,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKRenameColumnsWithExplic
   LOG(INFO) << "Total records read by GetChanges call, alter table: " << record_size;
 }
 
-TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleDDLWithRestartTServer)) {
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleAlterWithRestartTServer)) {
   const int num_tservers = 3;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
   // create table with 3 columns
@@ -4197,6 +4220,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleDDLWithRestartT
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
   ASSERT_EQ(tablets.size(), num_tablets);
+  FLAGS_timestamp_history_retention_interval_sec = 0;
 
   // Insert some records in transaction.
   ASSERT_OK(WriteRows(1 /* start */, 6 /* end */, &test_cluster_, {kValue2ColumnName}));
@@ -4262,6 +4286,86 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleDDLWithRestartT
   }
   ASSERT_GE(record_size, 20);
   LOG(INFO) << "Total records read by GetChanges call, after alter table: " << record_size;
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleAlterWithTabletLeaderSwitch)) {
+  const int num_tservers = 3;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+  FLAGS_timestamp_history_retention_interval_sec = 0;
+
+  // Create CDC stream.
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  ASSERT_OK(WriteRowsHelper(1 /* start */, 11 /* end */, &test_cluster_, true));
+  // Call Getchanges
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+  GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  // Validate the columns and insert counts.
+  ValidateColumnCounts(change_resp, 2);
+  ValidateInsertCounts(change_resp, 10);
+
+  // Insert 10 more records and do the LEADERship change
+  ASSERT_OK(WriteRows(11, 21, &test_cluster_));
+  size_t first_leader_index = -1;
+  size_t first_follower_index = -1;
+  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
+  if (first_leader_index == 0) {
+    // We want to avoid the scenario where the first TServer is the leader, since we want to shut
+    // the leader TServer down and call GetChanges. GetChanges will be called on the cdc_proxy based
+    // on the first TServer's address and we want to avoid the network issues.
+    ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+  }
+  ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+  SleepFor(MonoDelta::FromSeconds(10));
+
+  // Call GetChanges with new LEADER.
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  // Validate the columns and insert counts.
+  ValidateColumnCounts(change_resp, 2);
+  ValidateInsertCounts(change_resp, 10);
+
+  auto table1 =
+      ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  ASSERT_OK(
+      WriteRowsHelper(21 /* start */, 31 /* end */, &test_cluster_, true, {kValue2ColumnName}));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  // Validate the columns and insert counts.
+  ValidateColumnCounts(change_resp, 3);
+  ValidateInsertCounts(change_resp, 10);
+
+  // Add a new column and insert few more records.
+  // Do LEADERship change.
+  // Call Getchanges in the new leader.
+  table1 = ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue3ColumnName));
+  ASSERT_OK(WriteRows(31, 41, &test_cluster_, {kValue2ColumnName, kValue3ColumnName}));
+  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
+  if (first_leader_index == 0) {
+    // We want to avoid the scenario where the first TServer is the leader, since we want to shut
+    // the leader TServer down and call GetChanges. GetChanges will be called on the cdc_proxy based
+    // on the first TServer's address and we want to avoid the network issues.
+    ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+  }
+  ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  // Validate the columns and insert counts.
+  ValidateColumnCounts(change_resp, 4);
+  ValidateInsertCounts(change_resp, 10);
 }
 
 }  // namespace enterprise

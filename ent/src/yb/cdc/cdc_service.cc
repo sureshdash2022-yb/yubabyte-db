@@ -282,7 +282,8 @@ class CDCServiceImpl::Impl {
       const ProducerTabletInfo& producer_tablet,
       const std::string& timestamp,
       const std::shared_ptr<Schema>& schema,
-      const OpId& op_id) {
+      const OpId& op_id,
+      const uint32_t current_schema_version) {
     std::lock_guard<decltype(mutex_)> l(mutex_);
     auto it = cdc_state_metadata_.find(producer_tablet);
     if (it == cdc_state_metadata_.end()) {
@@ -293,6 +294,7 @@ class CDCServiceImpl::Impl {
     it->commit_timestamp = timestamp;
     it->current_schema = schema;
     it->last_streamed_op_id = op_id;
+    it->current_schema_version = current_schema_version;
   }
 
   std::pair<uint32_t, std::shared_ptr<Schema>> GetOrAddSchema(
@@ -311,7 +313,7 @@ class CDCServiceImpl::Impl {
         .commit_timestamp = {},
         .current_schema = std::make_shared<Schema>(),
         .last_streamed_op_id = OpId(),
-        .current_schema_version = 0,
+        .current_schema_version = std::numeric_limits<uint32_t>::max(),
         .mem_tracker = nullptr,
     };
     cdc_state_metadata_.emplace(info);
@@ -1430,7 +1432,8 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     }
 
     impl_->UpdateCDCStateMetadata(
-        producer_tablet, commit_timestamp, cached_schema, last_streamed_op_id);
+        producer_tablet, commit_timestamp, cached_schema, last_streamed_op_id,
+        cached_schema_version);
   }
 
   auto tablet_metric = GetCDCTabletMetrics(producer_tablet, tablet_peer);
