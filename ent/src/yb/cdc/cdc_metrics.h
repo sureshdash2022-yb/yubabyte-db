@@ -75,6 +75,24 @@ class CDCTabletMetrics {
   // Lag between last record applied on consumer and producer.
   scoped_refptr<AtomicGauge<int64_t> > async_replication_committed_lag_micros;
 
+  // Info about if a tablet has fallen too far behind in replication.
+  scoped_refptr<AtomicGauge<bool>> is_bootstrap_required;
+
+  // Info on the received GetChanges requests.
+  scoped_refptr<AtomicGauge<uint64_t> > last_getchanges_time;
+  scoped_refptr<AtomicGauge<int64_t> > time_since_last_getchanges;
+
+  // Info on the time till which the consumer is caught-up with the producer.
+  scoped_refptr<AtomicGauge<uint64_t>> last_caughtup_physicaltime;
+
+ private:
+  scoped_refptr<MetricEntity> entity_;
+};
+
+class CDCSDKTabletMetrics {
+ public:
+  explicit CDCSDKTabletMetrics(const scoped_refptr<MetricEntity>& metric_entity_cdcsdk);
+
   // Lag between last committed record in the producer and last the sent record.
   scoped_refptr<AtomicGauge<int64_t>> cdcsdk_sent_lag_micros;
   // Lag between last committed record in the producer and first the sent record.
@@ -85,16 +103,6 @@ class CDCTabletMetrics {
   scoped_refptr<Counter> cdcsdk_change_event_count;
   // Remaining expiry time of stream in milli seconds.
   scoped_refptr<AtomicGauge<uint64_t>> cdcsdk_expiry_time_ms;
-
-  // Info about if a tablet has fallen too far behind in replication.
-  scoped_refptr<AtomicGauge<bool>> is_bootstrap_required;
-
-  // Info on the received GetChanges requests.
-  scoped_refptr<AtomicGauge<uint64_t> > last_getchanges_time;
-  scoped_refptr<AtomicGauge<int64_t> > time_since_last_getchanges;
-
-  // Info on the time till which the consumer is caught-up with the producer.
-  scoped_refptr<AtomicGauge<uint64_t>> last_caughtup_physicaltime;
 
  private:
   scoped_refptr<MetricEntity> entity_;
