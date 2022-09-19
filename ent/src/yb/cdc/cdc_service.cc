@@ -295,8 +295,8 @@ class CDCServiceImpl::Impl {
     it->last_streamed_op_id = op_id;
   }
 
-  std::pair<uint32_t, std::shared_ptr<Schema>> GetOrAddSchema(const ProducerTabletInfo &producer_tablet,
-                                         const bool need_schema_info) {
+  std::pair<uint32_t, std::shared_ptr<Schema>> GetOrAddSchema(
+      const ProducerTabletInfo& producer_tablet, const bool need_schema_info) {
     std::lock_guard<decltype(mutex_)> l(mutex_);
     auto it = cdc_state_metadata_.find(producer_tablet);
 
@@ -306,13 +306,13 @@ class CDCServiceImpl::Impl {
       }
       return make_pair(it->current_schema_version, it->current_schema);
     }
-    CDCStateMetadataInfo info = CDCStateMetadataInfo {
-      .producer_tablet_info = producer_tablet,
-      .commit_timestamp = {},
-      .current_schema = std::make_shared<Schema>(),
-      .last_streamed_op_id = OpId(),
-      .current_schema_version = 0,
-      .mem_tracker = nullptr,
+    CDCStateMetadataInfo info = CDCStateMetadataInfo{
+        .producer_tablet_info = producer_tablet,
+        .commit_timestamp = {},
+        .current_schema = std::make_shared<Schema>(),
+        .last_streamed_op_id = OpId(),
+        .current_schema_version = 0,
+        .mem_tracker = nullptr,
     };
     cdc_state_metadata_.emplace(info);
     return {info.current_schema_version, info.current_schema};
