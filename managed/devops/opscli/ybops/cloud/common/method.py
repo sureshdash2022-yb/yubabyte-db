@@ -272,8 +272,9 @@ class AbstractInstancesMethod(AbstractMethod):
             time.sleep(1)
             host_lookup_count += 1
 
-        raise YBOpsRecoverableError("Timed out waiting for instance: '{0}'".format(
-            args.search_pattern))
+        raise YBOpsRecoverableError("Timed out waiting for instance: '{0}'. {}@{}:{}".format(
+            args.search_pattern, self.extra_vars["ssh_user"],
+            self.extra_vars["ssh_host"], self.extra_vars["ssh_port"]))
 
     # Find the open ssh port and update the dictionary.
     def update_open_ssh_port(self, args):
@@ -1635,17 +1636,19 @@ class RebootInstancesMethod(AbstractInstancesMethod):
             ssh_user = DEFAULT_SSH_USER
 
         if args.use_ssh:
-            use_default_port = not self.update_open_ssh_port(args)
             self.extra_vars.update(get_ssh_host_port(host_info, args.custom_ssh_port,
-                                                     default_port=use_default_port))
+                                                     default_port=True))
             self.extra_vars.update({"ssh_user": ssh_user})
-            rc, stdout, stderr = remote_exec_command(
+            self.update_open_ssh_port(args)
+            _, _, stderr = remote_exec_command(
                                     self.extra_vars["ssh_host"],
                                     self.extra_vars["ssh_port"],
                                     self.extra_vars["ssh_user"],
                                     args.private_key_file,
                                     'sudo reboot', ssh2_enabled=args.ssh2_enabled)
-            if rc:
+            # Cannot rely on rc, as for reboot script won't exit gracefully,
+            # & we will be returned -1.
+            if (isinstance(stderr, list) and len(stderr) > 0):
                 raise YBOpsRecoverableError(f"Failed to connect to {args.search_pattern}")
 
             self.wait_for_host(args, False)
@@ -1759,7 +1762,8 @@ class WaitForSSHConnection(AbstractInstancesMethod):
             get_ssh_host_port(host_info, args.custom_ssh_port, default_port=True))
         # Update with the open port.
         self.update_open_ssh_port(args)
-        self.extra_vars['ssh_user'] = self.extra_vars.get("ssh_user", DEFAULT_SSH_USER)
+        # Update the ansible args (particularly ssh user).
+        self.update_ansible_vars_with_args(args)
         # Port is already open. Wait for ssh to succeed.
         connected = wait_for_ssh(self.extra_vars["ssh_host"],
                                  self.extra_vars["ssh_port"],
@@ -1767,5 +1771,7 @@ class WaitForSSHConnection(AbstractInstancesMethod):
                                  args.private_key_file,
                                  ssh2_enabled=args.ssh2_enabled)
         if not connected:
-            raise YBOpsRuntimeError("SSH connection to port {} failed"
-                                    .format(self.extra_vars["ssh_port"]))
+            raise YBOpsRuntimeError("SSH connection to {} at {}:{} failed"
+                                    .format(self.extra_vars["ssh_host"],
+                                            self.extra_vars["ssh_user"],
+                                            self.extra_vars["ssh_port"]))

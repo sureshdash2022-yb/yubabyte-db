@@ -44,8 +44,6 @@ namespace docdb {
 
 namespace {
 
-using SubtxnHasNonLockConflict = std::unordered_map<SubTransactionId, bool>;
-
 struct TransactionConflictInfo {
   WaitPolicy wait_policy;
   // Map storing subtransaction_id -> bool which tracks whether or not that subtransaction has a
@@ -56,10 +54,10 @@ struct TransactionConflictInfo {
   //      rollbacks.
   //   2. If a transaction has committed and all its live subtransactions wrote only
   //      non-modification intents, we don't have to consider them for conflicts.
-  SubtxnHasNonLockConflict subtransactions;
+  std::shared_ptr<SubtxnHasNonLockConflict> subtransactions;
 
   std::string ToString() const {
-    return YB_STRUCT_TO_STRING(wait_policy, subtransactions);
+    return YB_STRUCT_TO_STRING(wait_policy, *subtransactions);
   }
 };
 
@@ -69,22 +67,23 @@ using TransactionConflictInfoMap = std::unordered_map<TransactionId,
 
 struct TransactionData {
   TransactionData(
-      TransactionId id_, WaitPolicy wait_policy_, SubtxnHasNonLockConflict subtransactions_)
+      TransactionId id_, WaitPolicy wait_policy_,
+      std::shared_ptr<SubtxnHasNonLockConflict> subtransactions_)
       : id(id_), wait_policy(wait_policy_), subtransactions(subtransactions_) {}
 
   TransactionId id;
   WaitPolicy wait_policy;
-  SubtxnHasNonLockConflict subtransactions;
+  std::shared_ptr<SubtxnHasNonLockConflict> subtransactions;
   TransactionStatus status;
   HybridTime commit_time;
   uint64_t priority;
   Status failure;
 
   void RemoveAbortedSubtransactions(const AbortedSubTransactionSet& aborted_subtxn_set) {
-    auto it = subtransactions.begin();
-    while (it != subtransactions.end()) {
+    auto it = subtransactions->begin();
+    while (it != subtransactions->end()) {
       if (aborted_subtxn_set.Test(it->first)) {
-        it = subtransactions.erase(it);
+        it = subtransactions->erase(it);
       } else {
         it++;
       }
@@ -287,13 +286,14 @@ class ConflictResolver : public std::enable_shared_from_this<ConflictResolver> {
           auto p = conflicts_.emplace(transaction_id,
                                       TransactionConflictInfo {
                                         .wait_policy = wait_policy,
-                                        .subtransactions = {},
+                                        .subtransactions =
+                                            std::make_shared<SubtxnHasNonLockConflict>(),
                                       });
           if (!p.second) {
             p.first->second.wait_policy = VERIFY_RESULT(
                 CombineWaitPolicy(p.first->second.wait_policy, wait_policy));
           }
-          p.first->second.subtransactions[decoded_value.subtransaction_id] |= !lock_only;
+          (*p.first->second.subtransactions)[decoded_value.subtransaction_id] |= !lock_only;
         }
       }
 
@@ -623,8 +623,7 @@ class PessimisticLockingConflictResolver : public ConflictResolver {
       LockBatch* lock_batch)
         : ConflictResolver(
         doc_db, status_manager, partial_range_key_intents, std::move(context), std::move(callback)),
-      wait_queue_(wait_queue), lock_batch_(lock_batch)
-    {}
+        wait_queue_(wait_queue), lock_batch_(lock_batch) {}
 
   Status OnConflictingTransactionsFound() override {
     DCHECK_GT(remaining_transactions_, 0);
@@ -638,6 +637,7 @@ class PessimisticLockingConflictResolver : public ConflictResolver {
         blockers.emplace_back(BlockingTransactionData {
           .id = txn.id,
           .status_tablet = "",
+          .subtransactions = txn.subtransactions,
         });
     }
     status_manager().FillStatusTablets(&blockers);
@@ -652,7 +652,7 @@ class PessimisticLockingConflictResolver : public ConflictResolver {
 
     return wait_queue_->WaitOn(
         context_->transaction_id(), lock_batch_, std::move(blockers),
-        VERIFY_RESULT(context_->GetStatusTablet(this)),
+        context_->transaction_id().IsNil() ? "" : VERIFY_RESULT(context_->GetStatusTablet(this)),
         std::bind(&PessimisticLockingConflictResolver::WaitingDone, shared_from(this), _1));
   }
 
@@ -676,8 +676,8 @@ class PessimisticLockingConflictResolver : public ConflictResolver {
   }
 
  private:
-  WaitQueue* wait_queue_;
-  LockBatch* lock_batch_;
+  WaitQueue* const wait_queue_;
+  LockBatch* const lock_batch_;
   uint32_t wait_for_iters_ = 0;
 };
 
@@ -1060,7 +1060,7 @@ class TransactionConflictResolverContext : public ConflictResolverContextBase {
     // locally or returned by the status tablet. If this is now empty, then all potentially
     // conflicting intents have been aborted and there is no longer a conflict with this
     // transaction.
-    return transaction_data.subtransactions.empty();
+    return transaction_data.subtransactions->empty();
   }
 
   Result<bool> CheckConflictWithCommitted(
@@ -1071,7 +1071,7 @@ class TransactionConflictResolverContext : public ConflictResolverContextBase {
                         << ", read_time: " << read_time_
                         << ", transaction_data: " << transaction_data.ToString();
 
-    for (const auto& subtxn_and_data : transaction_data.subtransactions) {
+    for (const auto& subtxn_and_data : *transaction_data.subtransactions) {
       auto has_non_lock_conflict = subtxn_and_data.second;
       // If the intents to be written conflict with only "explicit row lock" intents of a committed
       // transaction, we can proceed now because a committed transaction implies that the locks are
@@ -1253,15 +1253,22 @@ void ResolveOperationConflicts(const DocOperations& doc_ops,
                                PartialRangeKeyIntents partial_range_key_intents,
                                TransactionStatusManager* status_manager,
                                Counter* conflicts_metric,
+                               LockBatch* lock_batch,
+                               WaitQueue* wait_queue,
                                ResolutionCallback callback) {
   TRACE("ResolveOperationConflicts");
   auto context = std::make_unique<OperationConflictResolverContext>(&doc_ops, resolution_ht,
                                                                     conflicts_metric);
-  // TODO(pessimistic): Integrate pessimistic locking with single-shard transactions.
-  auto resolver = std::make_shared<OptimisticLockingConflictResolver>(
-      doc_db, status_manager, partial_range_key_intents, std::move(context), std::move(callback));
-  // Resolve takes a self reference to extend lifetime.
-  resolver->Resolve();
+  if (wait_queue) {
+    auto resolver = std::make_shared<PessimisticLockingConflictResolver>(
+        doc_db, status_manager, partial_range_key_intents, std::move(context),
+        std::move(callback), wait_queue, lock_batch);
+    resolver->Resolve();
+  } else {
+    auto resolver = std::make_shared<OptimisticLockingConflictResolver>(
+        doc_db, status_manager, partial_range_key_intents, std::move(context), std::move(callback));
+    resolver->Resolve();
+  }
   TRACE("resolver->Resolve done");
 }
 
