@@ -2103,10 +2103,11 @@ Status DBImpl::CompactRange(const CompactRangeOptions& options,
   if (options.target_path_id >= db_options_.db_paths.size()) {
     return STATUS(InvalidArgument, "Invalid target path ID");
   }
-
+  LOG(INFO) << "suresh: Inside the CompactRange method......:" << GetName();
   auto cfh = down_cast<ColumnFamilyHandleImpl*>(column_family);
   auto cfd = cfh->cfd();
   bool exclusive = options.exclusive_manual_compaction;
+
 
   if (!options.skip_flush) {
     Status s = FlushMemTable(cfd, FlushOptions());
@@ -2231,7 +2232,7 @@ Status DBImpl::CompactFiles(
   if (column_family == nullptr) {
     return STATUS(InvalidArgument, "ColumnFamilyHandle must be non-null.");
   }
-
+  LOG(INFO) << "suresh: Inside the CompactFiles method .......: " << GetName();
   auto cfd = down_cast<ColumnFamilyHandleImpl*>(column_family)->cfd();
   assert(cfd);
 

@@ -748,6 +748,7 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
   const Schema* unique_index_key_schema() const {
     return unique_index_key_schema_.get();
   }
+  CoarseTimePoint cdc_history_retention_expiration_ = CoarseTimePoint::min();
 
  private:
   friend class Iterator;

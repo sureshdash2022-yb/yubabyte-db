@@ -260,6 +260,13 @@ DECLARE_uint64(rocksdb_max_file_size_for_compaction);
 DECLARE_int64(apply_intents_task_injected_delay_ms);
 DECLARE_string(regular_tablets_data_block_key_value_encoding);
 DECLARE_int64(cdc_intent_retention_ms);
+DEFINE_int32(
+    cdc_history_retention_interval_sec, 900,
+    "The time interval in seconds to retain system catalog history for Point-in-time reads at a "
+    "hybrid time further than this in the past might not be allowed after a compaction. Set this "
+    "to be higher than the expected maximum duration of any single transaction "
+    "in your application.");
+TAG_FLAG(cdc_history_retention_interval_sec, runtime);
 
 DEFINE_test_flag(uint64, inject_sleep_before_applying_intents_ms, 0,
                  "Sleep before applying intents to docdb after transaction commit");
@@ -3205,7 +3212,23 @@ Status Tablet::ForceFullRocksDBCompact(docdb::SkipFlush skip_flush) {
   auto scoped_operation = CreateAbortableScopedRWOperation();
   RETURN_NOT_OK(scoped_operation);
 
+  if (tablet_id() == std::string("00000000000000000000000000000000") &&
+      (cdc_history_retention_expiration_ == CoarseTimePoint::min() ||
+       CoarseMonoClock::Now() < cdc_history_retention_expiration_)) {
+    cdc_history_retention_expiration_ =
+        CoarseMonoClock::Now() +
+        MonoDelta::FromMicroseconds(GetAtomicFlag(&FLAGS_cdc_history_retention_interval_sec));
+    LOG(INFO) << "suresh: Right now ignoring the compaction for system catalog table.";
+    return Status::OK();
+  }
+
   if (regular_db_) {
+    LOG(INFO) << "suresh: compacttion is called for:  " << tablet_id()
+              << " dbname: " << regular_db_->GetName() << " cdc_history_retention_expiration_: "
+              << cdc_history_retention_expiration_.time_since_epoch().count()
+              << " CoarseMonoClock::Now(): " << CoarseMonoClock::Now().time_since_epoch().count();
+    ;
+
     RETURN_NOT_OK(docdb::ForceRocksDBCompact(regular_db_.get(), skip_flush));
   }
   if (intents_db_) {
