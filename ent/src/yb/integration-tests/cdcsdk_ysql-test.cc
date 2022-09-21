@@ -89,6 +89,8 @@ DECLARE_uint64(aborted_intent_cleanup_ms);
 DECLARE_int32(cdc_min_replicated_index_considered_stale_secs);
 DECLARE_int32(log_min_seconds_to_retain);
 DECLARE_int32(timestamp_history_retention_interval_sec);
+DECLARE_int32(cdc_history_retention_interval_sec);
+
 
 namespace yb {
 
@@ -903,6 +905,17 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
         test_cluster()->mini_tablet_server(new_leader_index)->server()->permanent_uuid());
     RETURN_NOT_OK(Subprocess::Call(argv));
 
+    return Status::OK();
+  }
+
+  Status CompactSystemTable() {
+    string tool_path = GetToolPath("../bin", "yb-admin");
+    vector<string> argv;
+    argv.push_back(tool_path);
+    argv.push_back("-master_addresses");
+    argv.push_back(AsString(test_cluster_.mini_cluster_->mini_master(0)->bound_rpc_addr()));
+    argv.push_back("compact_sys_catalog");
+    RETURN_NOT_OK(Subprocess::Call(argv));
     return Status::OK();
   }
 
@@ -4486,6 +4499,82 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleAlterWithTablet
   // Validate the columns and insert counts.
   ValidateColumnCounts(change_resp, 4);
   ValidateInsertCounts(change_resp, 10);
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterWithSysCatalogCompaction)) {
+  const int num_tservers = 1;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(
+      &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, false, "", "public",
+      {kValue2ColumnName}));
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+  FLAGS_cdc_history_retention_interval_sec = 1000;
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRows(1 /* start */, 101 /* end */, &test_cluster_, {kValue2ColumnName}));
+
+  // Add a column
+  auto table1 =
+      ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue3ColumnName));
+  ASSERT_OK(WriteRows(
+      101 /* start */, 201 /* end */, &test_cluster_, {kValue2ColumnName, kValue3ColumnName}));
+
+  // Drop one column
+  table1 = ASSERT_RESULT(DropColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  ASSERT_OK(WriteRows(201 /* start */, 301 /* end */, &test_cluster_, {kValue3ColumnName}));
+
+  // Add the 2 columns
+  table1 = ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue4ColumnName));
+  table1 = ASSERT_RESULT(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  ASSERT_OK(WriteRows(
+      301 /* start */, 401 /* end */, &test_cluster_,
+      {kValue2ColumnName, kValue3ColumnName, kValue4ColumnName}));
+
+  ASSERT_OK(CompactSystemTable());
+
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+
+  GetChangesResponsePB change_resp;
+  auto result = GetChangesFromCDC(stream_id, tablets);
+  if (!result.ok()) {
+    ASSERT_OK(result);
+  }
+  change_resp = *result;
+
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  for (uint32_t idx = 0; idx < record_size; idx++) {
+    const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(idx);
+    std::stringstream s;
+    if (record.row_message().op() == RowMessage_Op::RowMessage_Op_INSERT) {
+      auto key_value = record.row_message().new_tuple(0).datum_int32();
+      // key no 1 to 5 should have 3 columns.
+      if (key_value >= 1 && key_value < 101) {
+        ASSERT_EQ(record.row_message().new_tuple_size(), 3);
+      } else if (key_value >= 101 && key_value < 201) {
+        // Added a new column
+        ASSERT_EQ(record.row_message().new_tuple_size(), 4);
+      } else if (key_value >= 201 && key_value < 301) {
+        // Dropped a column
+        ASSERT_EQ(record.row_message().new_tuple_size(), 3);
+      } else {
+        // Added 2 new columns
+        ASSERT_EQ(record.row_message().new_tuple_size(), 5);
+      }
+    }
+    for (int jdx = 0; jdx < record.row_message().new_tuple_size(); jdx++) {
+      s << " " << record.row_message().new_tuple(jdx).datum_int32();
+    }
+    LOG(INFO) << "row: " << idx << " : " << s.str();
+  }
+  ASSERT_GE(record_size, 400);
+  LOG(INFO) << "Total records read by GetChanges call, after alter table: " << record_size;
 }
 
 }  // namespace enterprise

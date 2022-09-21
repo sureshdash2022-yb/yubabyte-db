@@ -3218,7 +3218,7 @@ Status Tablet::ForceFullRocksDBCompact(docdb::SkipFlush skip_flush) {
        CoarseMonoClock::Now() < cdc_history_retention_expiration_)) {
     cdc_history_retention_expiration_ =
         CoarseMonoClock::Now() +
-        MonoDelta::FromMicroseconds(GetAtomicFlag(&FLAGS_cdc_history_retention_interval_sec));
+        MonoDelta::FromSeconds(GetAtomicFlag(&FLAGS_cdc_history_retention_interval_sec));
     VLOG(1) << "Compaction for system catalog table is ignored because CDC is enabled.";
     return Status::OK();
   }
