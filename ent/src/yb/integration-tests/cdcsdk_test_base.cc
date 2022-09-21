@@ -219,7 +219,8 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
     const int table_oid,
     const bool enum_value,
     const std::string& enum_suffix,
-    const std::string& schema_name) {
+    const std::string& schema_name,
+    const std::vector<string>& optional_cols_name) {
   auto conn = VERIFY_RESULT(cluster->ConnectToDB(namespace_name));
 
   if (enum_value) {
@@ -227,8 +228,8 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
       RETURN_NOT_OK(conn.ExecuteFormat("create schema $0;", schema_name));
     }
     RETURN_NOT_OK(conn.ExecuteFormat(
-        "CREATE TYPE $0.coupon_discount_type$1 AS ENUM ('FIXED$2','PERCENTAGE$3');",
-        schema_name, enum_suffix, enum_suffix, enum_suffix));
+        "CREATE TYPE $0.coupon_discount_type$1 AS ENUM ('FIXED$2','PERCENTAGE$3');", schema_name,
+        enum_suffix, enum_suffix, enum_suffix));
   }
 
   std::string table_oid_string = "";
@@ -237,13 +238,76 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
     RETURN_NOT_OK(conn.Execute("set yb_enable_create_with_table_oid=true"));
     table_oid_string = Format("table_oid = $0,", table_oid);
   }
+
+  if (!optional_cols_name.empty()) {
+    std::stringstream columns_name;
+    std::stringstream columns_value;
+    string primary_key = add_primary_key ? "PRIMARY KEY" : "";
+    string second_column_type =
+        enum_value ? (schema_name + "." + "coupon_discount_type" + enum_suffix) : " int";
+    columns_name << "( " << kKeyColumnName << " int " << primary_key << "," << kValueColumnName
+                 << second_column_type;
+    for (const auto& optional_col_name : optional_cols_name) {
+      columns_name << " , " << optional_col_name << " int ";
+    }
+    columns_name << " )";
+    columns_value << " )";
+    RETURN_NOT_OK(conn.ExecuteFormat(
+        "CREATE TABLE $0.$1 $2 WITH ($3colocated = $4) "
+        "SPLIT INTO $5 TABLETS",
+        schema_name, table_name + enum_suffix, columns_name.str(), table_oid_string, colocated,
+        num_tablets));
+  } else {
+    RETURN_NOT_OK(conn.ExecuteFormat(
+        "CREATE TABLE $0.$1($2 int $3, $4 $5) WITH ($6colocated = $7) "
+        "SPLIT INTO $8 TABLETS",
+        schema_name, table_name + enum_suffix, kKeyColumnName,
+        (add_primary_key) ? "PRIMARY KEY" : "", kValueColumnName,
+        enum_value ? (schema_name + "." + "coupon_discount_type" + enum_suffix) : "int",
+        table_oid_string, colocated, num_tablets));
+  }
+  return GetTable(cluster, namespace_name, table_name + enum_suffix);
+}
+
+Result<YBTableName> CDCSDKTestBase::AddColumn(
+    Cluster* cluster,
+    const std::string& namespace_name,
+    const std::string& table_name,
+    const std::string& add_column_name,
+    const std::string& enum_suffix,
+    const std::string& schema_name) {
+  auto conn = VERIFY_RESULT(cluster->ConnectToDB(namespace_name));
   RETURN_NOT_OK(conn.ExecuteFormat(
-      "CREATE TABLE $0.$1($2 int $3, $4 $5) WITH ($6colocated = $7) "
-      "SPLIT INTO $8 TABLETS",
-      schema_name, table_name + enum_suffix, kKeyColumnName, (add_primary_key) ? "PRIMARY KEY" : "",
-      kValueColumnName,
-      enum_value ? (schema_name + "." + "coupon_discount_type" + enum_suffix) : "int",
-      table_oid_string, colocated, num_tablets));
+      "ALTER TABLE $0.$1 ADD COLUMN $2 int", schema_name, table_name + enum_suffix,
+      add_column_name));
+  return GetTable(cluster, namespace_name, table_name + enum_suffix);
+}
+
+Result<YBTableName> CDCSDKTestBase::DropColumn(
+    Cluster* cluster,
+    const std::string& namespace_name,
+    const std::string& table_name,
+    const std::string& column_name,
+    const std::string& enum_suffix,
+    const std::string& schema_name) {
+  auto conn = VERIFY_RESULT(cluster->ConnectToDB(namespace_name));
+  RETURN_NOT_OK(conn.ExecuteFormat(
+      "ALTER TABLE $0.$1 DROP COLUMN $2", schema_name, table_name + enum_suffix, column_name));
+  return GetTable(cluster, namespace_name, table_name + enum_suffix);
+}
+
+Result<YBTableName> CDCSDKTestBase::RenameColumn(
+    Cluster* cluster,
+    const std::string& namespace_name,
+    const std::string& table_name,
+    const std::string& old_column_name,
+    const std::string& new_column_name,
+    const std::string& enum_suffix,
+    const std::string& schema_name) {
+  auto conn = VERIFY_RESULT(cluster->ConnectToDB(namespace_name));
+  RETURN_NOT_OK(conn.ExecuteFormat(
+      "ALTER TABLE $0.$1 RENAME COLUMN $2 TO $3", schema_name, table_name + enum_suffix,
+      old_column_name, new_column_name));
   return GetTable(cluster, namespace_name, table_name + enum_suffix);
 }
 

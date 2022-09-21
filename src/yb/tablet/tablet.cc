@@ -252,6 +252,14 @@ DEFINE_test_flag(bool, disable_getting_user_frontier_from_mem_table, false,
                  "Prevents checking the MemTable for a UserFrontier for test cases where we are "
                  "generating SST files without UserFrontiers.");
 
+DEFINE_int32(
+    cdc_history_retention_interval_sec, 900,
+    "The time interval in seconds to retain system catalog history for Point-in-time reads at a "
+    "hybrid time further than this in the past might not be allowed after a compaction. Set this "
+    "to be higher than the expected maximum duration of any single transaction "
+    "in your application.");
+TAG_FLAG(cdc_history_retention_interval_sec, runtime);
+
 DECLARE_int32(client_read_write_timeout_ms);
 DECLARE_bool(consistent_restore);
 DECLARE_int32(rocksdb_level0_slowdown_writes_trigger);
@@ -3204,6 +3212,16 @@ void Tablet::TEST_ForceRocksDBCompact(docdb::SkipFlush skip_flush) {
 Status Tablet::ForceFullRocksDBCompact(docdb::SkipFlush skip_flush) {
   auto scoped_operation = CreateAbortableScopedRWOperation();
   RETURN_NOT_OK(scoped_operation);
+
+  if (tablet_id() == std::string("00000000000000000000000000000000") &&
+      (cdc_history_retention_expiration_ == CoarseTimePoint::min() ||
+       CoarseMonoClock::Now() < cdc_history_retention_expiration_)) {
+    cdc_history_retention_expiration_ =
+        CoarseMonoClock::Now() +
+        MonoDelta::FromMicroseconds(GetAtomicFlag(&FLAGS_cdc_history_retention_interval_sec));
+    VLOG(1) << "Compaction for system catalog table is ignored because CDC is enabled.";
+    return Status::OK();
+  }
 
   if (regular_db_) {
     RETURN_NOT_OK(docdb::ForceRocksDBCompact(regular_db_.get(), skip_flush));

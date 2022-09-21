@@ -964,6 +964,8 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
 
   std::unique_ptr<docdb::ExternalTxnIntentsState> external_txn_intents_state_;
 
+  CoarseTimePoint cdc_history_retention_expiration_ = CoarseTimePoint::min();
+
   Result<HybridTime> DoGetSafeTime(
       RequireLease require_lease, HybridTime min_allowed, CoarseTimePoint deadline) const override;
 

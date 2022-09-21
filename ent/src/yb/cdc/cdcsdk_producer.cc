@@ -677,7 +677,9 @@ Status GetChangesForCDCSDK(
     GetChangesResponsePB* resp,
     std::string* commit_timestamp,
     std::shared_ptr<Schema>* cached_schema,
+    uint32_t* cached_schema_version,
     OpId* last_streamed_op_id,
+    client::YBClient* client,
     int64_t* last_readable_opid_index,
     const CoarseTimePoint deadline) {
   OpId op_id{from_op_id.term(), from_op_id.index()};
@@ -829,8 +831,21 @@ Status GetChangesForCDCSDK(
         last_seen_op_id.term = msg->id().term();
         last_seen_op_id.index = msg->id().index();
 
-        if (!schema_streamed && !(**cached_schema).initialized()) {
-          current_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
+        if ((!schema_streamed && !(**cached_schema).initialized()) ||
+            (*cached_schema_version != read_ops.header_schema_version)) {
+          auto result = client->GetTableSchemaFromSysCatalog(
+              tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
+          if (!result.ok()) {
+            LOG(ERROR)
+                << "Failed to get the specific schema version from system catalog for table: "
+                << tablet_peer->tablet()->metadata()->table_name();
+            return STATUS_FORMAT(
+                InternalError,
+                "Failed to get the specific schema version from system catalog for table: $0",
+                tablet_peer->tablet()->metadata()->table_name());
+          }
+          current_schema = result->first;
+          *cached_schema_version = result->second;
           const std::string& table_name = tablet_peer->tablet()->metadata()->table_name();
           schema_streamed = true;
 
@@ -896,6 +911,7 @@ Status GetChangesForCDCSDK(
             RETURN_NOT_OK(SchemaFromPB(msg->change_metadata_request().schema(), &current_schema));
             const std::string& table_name = tablet_peer->tablet()->metadata()->table_name();
             *cached_schema = std::make_shared<Schema>(std::move(current_schema));
+            *cached_schema_version = msg->change_metadata_request().schema_version();
             if ((resp->cdc_sdk_proto_records_size() > 0 &&
                  resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
                          .row_message()
