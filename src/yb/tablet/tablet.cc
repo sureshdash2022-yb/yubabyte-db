@@ -3227,8 +3227,6 @@ Status Tablet::ForceFullRocksDBCompact(docdb::SkipFlush skip_flush) {
               << " dbname: " << regular_db_->GetName() << " cdc_history_retention_expiration_: "
               << cdc_history_retention_expiration_.time_since_epoch().count()
               << " CoarseMonoClock::Now(): " << CoarseMonoClock::Now().time_since_epoch().count();
-    ;
-
     RETURN_NOT_OK(docdb::ForceRocksDBCompact(regular_db_.get(), skip_flush));
   }
   if (intents_db_) {
