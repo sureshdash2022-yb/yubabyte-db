@@ -731,7 +731,6 @@ Status SysCatalogTable::GetTableSchema(
   if (!tablet) {
     return STATUS(ShutdownInProgress, "SysConfig is shutting down.");
   }
-
   ReadHybridTime read_time = read_hybrid_time ? read_hybrid_time : ReadHybridTime::Max();
   const Schema& schema = doc_read_context_->schema;
   auto iter = VERIFY_RESULT(tablet->NewRowIterator(
@@ -774,7 +773,7 @@ Status SysCatalogTable::GetTableSchema(
         pb_util::ParseFromArray(&metadata_pb, binary_value.data(), binary_value.size()),
         "Unable to parse metadata field for table_id: " + entry_id_value.ToBuffer());
     if (table_id == entry_id_value.ToBuffer()) {
-      TableInfo* table = new TableInfo(table_id);
+      auto table = make_scoped_refptr<TableInfo>(table_id);
       auto l = table->LockForWrite();
       l.mutable_data()->pb.CopyFrom(metadata_pb);
       RETURN_NOT_OK(SchemaFromPB(l.mutable_data()->pb.schema(), current_schema));

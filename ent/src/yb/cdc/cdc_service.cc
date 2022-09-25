@@ -279,8 +279,10 @@ class CDCServiceImpl::Impl {
   }
 
   void UpdateCDCStateMetadata(
-      const ProducerTabletInfo& producer_tablet, const std::string& timestamp,
-      const std::shared_ptr<Schema>& schema, const OpId& op_id,
+      const ProducerTabletInfo& producer_tablet,
+      const std::string& timestamp,
+      const std::shared_ptr<Schema>& schema,
+      const OpId& op_id,
       const uint32_t current_schema_version) {
     std::lock_guard<decltype(mutex_)> l(mutex_);
     auto it = cdc_state_metadata_.find(producer_tablet);
@@ -311,7 +313,7 @@ class CDCServiceImpl::Impl {
         .commit_timestamp = {},
         .current_schema = std::make_shared<Schema>(),
         .last_streamed_op_id = OpId(),
-        .current_schema_version = std::numeric_limits<uint32_t>::max(),
+        .current_schema_version = std::numeric_limits<uint32_t>::min(),
         .mem_tracker = nullptr,
     };
     cdc_state_metadata_.emplace(info);
@@ -354,7 +356,6 @@ class CDCServiceImpl::Impl {
     SharedLock<rw_spinlock> lock(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
     if (it != tablet_checkpoints_.end()) {
-      // Use checkpoint from cache only if it is current.
       return it->sent_checkpoint.op_id;
     }
     return boost::none;
@@ -1392,15 +1393,17 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     OpId last_streamed_op_id;
     auto cached_schema_info = impl_->GetOrAddSchema(producer_tablet, req->need_schema_info());
     auto namespace_name = tablet_peer->tablet()->metadata()->namespace_name();
-    auto cached_schema = cached_schema_info.second;
-    auto cached_schema_version = cached_schema_info.first;
+    auto& [cached_schema_version, cached_schema] = cached_schema_info;
     auto last_sent_checkpoint = impl_->GetLastSentCheckpoint(producer_tablet);
     // If from_op_id is more than the last sent op_id, it may be the stale entry and tablet
     // LEADERship change may happen.
     if (last_sent_checkpoint == boost::none ||
         OpId::FromPB(cdc_sdk_op_id) > *last_sent_checkpoint) {
+      VLOG(1) << "Stale entry in the cache, because last sent checkpoint: "
+              << *last_sent_checkpoint << " less than from_op_id: " << OpId::FromPB(cdc_sdk_op_id)
+              << ", get proper schema version from system catalog.";
       cached_schema = std::make_shared<Schema>();
-      cached_schema_version = 0;
+      cached_schema_version = std::numeric_limits<uint32_t>::min();
     }
     auto enum_map_result = GetEnumMapFromCache(namespace_name);
     RPC_CHECK_AND_RETURN_ERROR(

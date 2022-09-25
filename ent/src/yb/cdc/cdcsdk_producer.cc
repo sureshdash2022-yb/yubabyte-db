@@ -830,9 +830,9 @@ Status GetChangesForCDCSDK(
       for (const auto& msg : read_ops.messages) {
         last_seen_op_id.term = msg->id().term();
         last_seen_op_id.index = msg->id().index();
-
         if ((!schema_streamed && !(**cached_schema).initialized()) ||
-            (*cached_schema_version != read_ops.header_schema_version)) {
+            (msg->change_metadata_request().has_schema_version() &&
+             *cached_schema_version != msg->change_metadata_request().schema_version())) {
           auto result = client->GetTableSchemaFromSysCatalog(
               tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
           if (!result.ok()) {
@@ -911,7 +911,27 @@ Status GetChangesForCDCSDK(
             RETURN_NOT_OK(SchemaFromPB(msg->change_metadata_request().schema(), &current_schema));
             const std::string& table_name = tablet_peer->tablet()->metadata()->table_name();
             *cached_schema = std::make_shared<Schema>(std::move(current_schema));
+            // CHANGE_METADATA_OP read can be an entry from the past unsuccessful
+            // alter schema operation and there is no way to distinguish successful vs unsuccessful
+            // CHANGE_METADATA_OP, cross-compare the schema version against the schema we read
+            // from system catalog based on the specific read_hybrid_time.
             *cached_schema_version = msg->change_metadata_request().schema_version();
+            auto result = client->GetTableSchemaFromSysCatalog(
+                tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
+            if (!result.ok()) {
+              LOG(ERROR)
+                  << "Failed to get the specific schema version from system catalog for table: "
+                  << tablet_peer->tablet()->metadata()->table_name();
+              return STATUS_FORMAT(
+                  InternalError,
+                  "Failed to get the specific schema version from system catalog for table: $0",
+                  tablet_peer->tablet()->metadata()->table_name());
+
+            } else if (*cached_schema_version != result->second) {
+              *cached_schema = std::make_shared<Schema>(std::move(result->first));
+              *cached_schema_version = result->second;
+            }
+
             if ((resp->cdc_sdk_proto_records_size() > 0 &&
                  resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
                          .row_message()

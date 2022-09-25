@@ -3407,23 +3407,24 @@ Status CatalogManager::BackfillMetadataForCDC(
 Status CatalogManager::GetTableSchemaFromSysCatalog(
     const GetTableSchemaFromSysCatalogRequestPB* req, GetTableSchemaFromSysCatalogResponsePB* resp,
     rpc::RpcContext* rpc) {
+  uint64_t read_time = std::numeric_limits<uint64_t>::max();
   if (!req->has_read_time()) {
-    return STATUS(
-        InvalidArgument, "Read hybrid time is not specified.", req->ShortDebugString(),
-        MasterError(MasterErrorPB::INVALID_REQUEST));
+    LOG(INFO) << "Reading latest schema version for: " << req->table().table_id()
+              << " from system catalog table";
+  } else {
+    read_time = req->read_time();
   }
-  Schema schema;
-  uint32_t schema_version;
   VLOG(1) << "Get the table: " << req->table().table_id()
           << " specific schema from system catalog with read hybrid time: " << req->read_time();
+  Schema schema;
+  uint32_t schema_version;
   auto status = sys_catalog_->GetTableSchema(
-      req->table().table_id(), ReadHybridTime::FromUint64(req->read_time()), &schema,
-      &schema_version);
+      req->table().table_id(), ReadHybridTime::FromUint64(read_time), &schema, &schema_version);
   if (!status.ok()) {
     Status s = STATUS_SUBSTITUTE(
         NotFound, "Could not find specific schema from system catalog for request $0.",
         req->DebugString());
-    return SetupError(resp->mutable_error(), MasterErrorPB::INVALID_SCHEMA, s);
+    return SetupError(resp->mutable_error(), MasterErrorPB::OBJECT_NOT_FOUND, s);
   }
   SchemaToPB(schema, resp->mutable_schema());
   resp->set_version(schema_version);

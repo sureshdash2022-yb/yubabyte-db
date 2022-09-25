@@ -146,7 +146,7 @@ class CDCSDKTestBase : public YBTest {
       const std::string& schema_name = "public",
       const std::vector<string>& optional_cols_name = {});
 
-  Result<YBTableName> AddColumn(
+  Status AddColumn(
       Cluster* cluster,
       const std::string& namespace_name,
       const std::string& table_name,
@@ -154,7 +154,7 @@ class CDCSDKTestBase : public YBTest {
       const std::string& enum_suffix = "",
       const std::string& schema_name = "public");
 
-  Result<YBTableName> DropColumn(
+  Status DropColumn(
       Cluster* cluster,
       const std::string& namespace_name,
       const std::string& table_name,
@@ -162,7 +162,7 @@ class CDCSDKTestBase : public YBTest {
       const std::string& enum_suffix = "",
       const std::string& schema_name = "public");
 
-  Result<YBTableName> RenameColumn(
+  Status RenameColumn(
       Cluster* cluster,
       const std::string& namespace_name,
       const std::string& table_name,

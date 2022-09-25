@@ -269,7 +269,7 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
   return GetTable(cluster, namespace_name, table_name + enum_suffix);
 }
 
-Result<YBTableName> CDCSDKTestBase::AddColumn(
+Status CDCSDKTestBase::AddColumn(
     Cluster* cluster,
     const std::string& namespace_name,
     const std::string& table_name,
@@ -280,10 +280,10 @@ Result<YBTableName> CDCSDKTestBase::AddColumn(
   RETURN_NOT_OK(conn.ExecuteFormat(
       "ALTER TABLE $0.$1 ADD COLUMN $2 int", schema_name, table_name + enum_suffix,
       add_column_name));
-  return GetTable(cluster, namespace_name, table_name + enum_suffix);
+  return Status::OK();
 }
 
-Result<YBTableName> CDCSDKTestBase::DropColumn(
+Status CDCSDKTestBase::DropColumn(
     Cluster* cluster,
     const std::string& namespace_name,
     const std::string& table_name,
@@ -293,10 +293,10 @@ Result<YBTableName> CDCSDKTestBase::DropColumn(
   auto conn = VERIFY_RESULT(cluster->ConnectToDB(namespace_name));
   RETURN_NOT_OK(conn.ExecuteFormat(
       "ALTER TABLE $0.$1 DROP COLUMN $2", schema_name, table_name + enum_suffix, column_name));
-  return GetTable(cluster, namespace_name, table_name + enum_suffix);
+  return Status::OK();
 }
 
-Result<YBTableName> CDCSDKTestBase::RenameColumn(
+Status CDCSDKTestBase::RenameColumn(
     Cluster* cluster,
     const std::string& namespace_name,
     const std::string& table_name,
@@ -308,7 +308,7 @@ Result<YBTableName> CDCSDKTestBase::RenameColumn(
   RETURN_NOT_OK(conn.ExecuteFormat(
       "ALTER TABLE $0.$1 RENAME COLUMN $2 TO $3", schema_name, table_name + enum_suffix,
       old_column_name, new_column_name));
-  return GetTable(cluster, namespace_name, table_name + enum_suffix);
+  return Status::OK();
 }
 
 Result<std::string> CDCSDKTestBase::GetNamespaceId(const std::string& namespace_name) {
