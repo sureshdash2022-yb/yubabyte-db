@@ -4391,8 +4391,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAddColumnsWithImplictTr
 
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(
-      &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, false, "", "public", 4,
-      {kValue2ColumnName, kValue3ColumnName}));
+      &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, false, "", "public",
+      4, {kValue2ColumnName, kValue3ColumnName}));
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
   ASSERT_EQ(tablets.size(), num_tablets);
