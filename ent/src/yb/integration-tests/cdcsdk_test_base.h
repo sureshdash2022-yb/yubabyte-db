@@ -144,6 +144,7 @@ class CDCSDKTestBase : public YBTest {
       bool enum_value = false,
       const std::string& enum_suffix = "",
       const std::string& schema_name = "public",
+      uint32_t num_cols = 2,
       const std::vector<string>& optional_cols_name = {});
 
   Status AddColumn(

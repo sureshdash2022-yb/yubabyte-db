@@ -25,7 +25,6 @@
 #include "yb/client/table_info.h"
 
 #include "yb/common/pg_types.h"
-#include "yb/common/pgsql_error.h"
 #include "yb/common/placement_info.h"
 #include "yb/common/ql_expr.h"
 #include "yb/common/ql_value.h"
@@ -524,11 +523,7 @@ Result<PerformFuture> PgSession::Perform(
   tserver::PgPerformOptionsPB options;
   if (use_catalog_session) {
     if (catalog_read_time_) {
-      if (*catalog_read_time_) {
-        catalog_read_time_->ToPB(options.mutable_read_time());
-      } else {
-        options.mutable_read_time();
-      }
+      catalog_read_time_.ToPB(options.mutable_read_time());
     }
     options.set_use_catalog_session(true);
   } else {
@@ -644,17 +639,6 @@ void PgSession::DeleteForeignKeyReference(const LightweightTableYbctid& key) {
   Erase(&fk_reference_cache_, key);
 }
 
-Status PgSession::PatchStatus(const Status& status, const PgObjectIds& relations) {
-  if (PgsqlRequestStatus(status) == PgsqlResponsePB::PGSQL_STATUS_DUPLICATE_KEY_ERROR) {
-    auto op_index = OpIndex::ValueFromStatus(status);
-    if (op_index && *op_index < relations.size()) {
-      return STATUS(AlreadyPresent, PgsqlError(YBPgErrorCode::YB_PG_UNIQUE_VIOLATION))
-          .CloneAndAddErrorCode(RelationOid(relations[*op_index].object_oid));
-    }
-  }
-  return status;
-}
-
 Result<int> PgSession::TabletServerCount(bool primary_only) {
   return pg_client_.TabletServerCount(primary_only);
 }
@@ -673,6 +657,10 @@ void PgSession::SetTimeout(const int timeout_ms) {
 
 void PgSession::ResetCatalogReadPoint() {
   catalog_read_time_ = ReadHybridTime();
+}
+
+bool PgSession::HasCatalogReadPoint() const {
+  return static_cast<bool>(catalog_read_time_);
 }
 
 void PgSession::TrySetCatalogReadPoint(const ReadHybridTime& read_ht) {

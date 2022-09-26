@@ -220,6 +220,7 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
     const bool enum_value,
     const std::string& enum_suffix,
     const std::string& schema_name,
+    uint32_t num_cols,
     const std::vector<string>& optional_cols_name) {
   auto conn = VERIFY_RESULT(cluster->ConnectToDB(namespace_name));
 
@@ -257,6 +258,17 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
         "SPLIT INTO $5 TABLETS",
         schema_name, table_name + enum_suffix, columns_name.str(), table_oid_string, colocated,
         num_tablets));
+  } else if (num_cols > 2) {
+    std::stringstream statement_buff;
+    statement_buff << "CREATE TABLE $0.$1(col1 int PRIMARY KEY, col2 int";
+    std::string rem_statement(" ) WITH ($2colocated = $3) SPLIT INTO $4 TABLETS");
+    for (uint32_t col_num = 3; col_num <= num_cols; ++col_num) {
+      statement_buff << ", col" << col_num << " int";
+    }
+    std::string statement(statement_buff.str() + rem_statement);
+
+    RETURN_NOT_OK(conn.ExecuteFormat(
+        statement, schema_name, table_name, table_oid_string, colocated, num_tablets));
   } else {
     RETURN_NOT_OK(conn.ExecuteFormat(
         "CREATE TABLE $0.$1($2 int $3, $4 $5) WITH ($6colocated = $7) "
@@ -388,6 +400,6 @@ Result<std::string> CDCSDKTestBase::CreateDBStream(CDCCheckpointType checkpoint_
   return resp.db_stream_id();
 }
 
-} // namespace enterprise
+}  // namespace enterprise
 } // namespace cdc
 } // namespace yb
