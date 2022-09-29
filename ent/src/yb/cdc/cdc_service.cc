@@ -1468,7 +1468,7 @@ Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
     UpdateCdcReplicatedIndexRequestPB update_index_req;
     UpdateCdcReplicatedIndexResponsePB update_index_resp;
     update_index_req.add_tablet_ids(tablet_id);
-    //update_index_req.add_boo
+    update_index_req.set_bootstrap(bootstrap);
     update_index_req.add_replicated_indices(cdc_checkpoint_min.cdc_op_id.index);
     update_index_req.add_replicated_terms(cdc_checkpoint_min.cdc_op_id.term);
     cdc_checkpoint_min.cdc_sdk_op_id.ToPB(update_index_req.add_cdc_sdk_consumed_ops());
@@ -2212,9 +2212,12 @@ void CDCServiceImpl::UpdateCdcReplicatedIndex(const UpdateCdcReplicatedIndexRequ
   // If we fail to update at least one tablet, roll back the replicated index for all mutated
   // tablets.
   std::vector<const std::string*> rollback_tablet_id_vec;
-  auto scope_exit = ScopeExit([this, &rollback_tablet_id_vec] {
-    for (const auto& tablet_id : rollback_tablet_id_vec) {
-      RollbackCdcReplicatedIndexEntry(*tablet_id);
+  auto scope_exit = ScopeExit([this, req, &rollback_tablet_id_vec] {
+    if (req->has_bootstrap() && req->bootstrap()) {
+      for (const auto& tablet_id : rollback_tablet_id_vec) {
+        VLOG(1) << "Rollbacking the cdc replicated index for the tablet_id: " << tablet_id;
+        RollbackCdcReplicatedIndexEntry(*tablet_id);
+      }
     }
   });
 

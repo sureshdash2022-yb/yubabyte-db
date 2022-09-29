@@ -4383,22 +4383,11 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentGCedWithTabletBootStrap
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
   auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
   ASSERT_FALSE(resp.has_error());
-
-  size_t first_leader_index = 0;
-  size_t first_follower_index = 0;
-  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
-
   // Insert some records.
-  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
-  ASSERT_OK(test_client()->FlushTables(
-      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
-      /* is_compaction = */ false));
+  ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
 
-  // Restart of the tsever will make Tablet Bootstrap.
-  //test_cluster()->mini_tablet_server(0)->Shutdown();
-  //ASSERT_OK(test_cluster()->mini_tablet_server(0)->RestartStoppedServer());
-#if 1
-  // Here testcase behave like a WAL cleaner thread.
+  // Forcefully change the tablet state from RUNNING to BOOTSTRAPPING and check metadata should not
+  // set to MAX.
   for (size_t i = 0; i < test_cluster()->num_tablet_servers(); i++) {
     for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
       if (tablet_peer->tablet_id() == tablets[0].tablet_id()) {
@@ -4408,14 +4397,25 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentGCedWithTabletBootStrap
       }
     }
   }
-#endif
-  SleepFor(MonoDelta::FromSeconds(10));
-  GetChangesResponsePB change_resp;
-  auto result = GetChangesFromCDC(stream_id, tablets);
-  if (!result.ok()) {
-    LOG(INFO) << "suresh: Getchange Failure with error: " << result->error().status().DebugString();
-    return;
+
+  for (size_t i = 0; i < test_cluster()->num_tablet_servers(); i++) {
+    for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
+      if (tablet_peer->tablet_id() == tablets[0].tablet_id()) {
+        ASSERT_NE(tablet_peer->cdc_sdk_min_checkpoint_op_id(), OpId::Max());
+        ASSERT_OK(tablet_peer->UpdateState(
+            tablet::RaftGroupStatePB::BOOTSTRAPPING, tablet::RaftGroupStatePB::RUNNING,
+            "Incorrect state to start TabletPeer, "));
+      }
+    }
   }
+  LOG(INFO) << "All nodes will be restarted";
+  for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
+    test_cluster()->mini_tablet_server(i)->Shutdown();
+    ASSERT_OK(test_cluster()->mini_tablet_server(i)->Start());
+    ASSERT_OK(test_cluster()->mini_tablet_server(i)->WaitStarted());
+  }
+
+  GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
   uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
   ASSERT_GE(record_size, 100);
   LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
