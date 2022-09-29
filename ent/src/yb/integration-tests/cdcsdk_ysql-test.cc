@@ -63,6 +63,7 @@
 #include "yb/tserver/ts_tablet_manager.h"
 #include "yb/tserver/tserver_admin.proxy.h"
 
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/enums.h"
 #include "yb/util/monotime.h"
 #include "yb/util/random_util.h"
@@ -90,6 +91,7 @@ DECLARE_int32(cdc_min_replicated_index_considered_stale_secs);
 DECLARE_int32(log_min_seconds_to_retain);
 DECLARE_bool(enable_single_record_update);
 DECLARE_bool(enable_delete_truncate_cdcsdk_table);
+DECLARE_bool(enable_load_balancing);
 
 namespace yb {
 
@@ -827,12 +829,25 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       PrepareChangeRequest(&change_req, stream_id, tablets, *cp, tablet_idx);
     }
 
-    RpcController get_changes_rpc;
-    RETURN_NOT_OK(cdc_proxy_->GetChanges(change_req, &change_resp, &get_changes_rpc));
+    // Retry only on LeaderNotReadyToServe errors
+    RETURN_NOT_OK(WaitFor(
+        [&]() -> Result<bool> {
+          RpcController get_changes_rpc;
+          auto status = cdc_proxy_->GetChanges(change_req, &change_resp, &get_changes_rpc);
 
-    if (change_resp.has_error()) {
-      return StatusFromPB(change_resp.error().status());
-    }
+          if (status.ok() && change_resp.has_error()) {
+            status = StatusFromPB(change_resp.error().status());
+          }
+
+          if (status.IsLeaderNotReadyToServe()) {
+            return false;
+          }
+
+          RETURN_NOT_OK(status);
+          return true;
+        },
+        MonoDelta::FromSeconds(kRpcTimeout),
+        "GetChanges timed out waiting for Leader to get ready"));
 
     return change_resp;
   }
@@ -1127,6 +1142,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   }
 
   Status ChangeLeaderOfTablet(size_t new_leader_index, const TabletId tablet_id) {
+    CHECK(!FLAGS_enable_load_balancing);
+
     string tool_path = GetToolPath("../bin", "yb-admin");
     vector<string> argv;
     argv.push_back(tool_path);
@@ -2886,6 +2903,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestHighIntentCountPersistencyAll
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentCountPersistencyBootstrap)) {
+  // Disable lb as we move tablets around
+  FLAGS_enable_load_balancing = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_update_metrics_interval_ms = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 1;
@@ -3812,6 +3831,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCreateStreamAfterSetCheckpoin
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange)) {
+  // Disable lb as we move tablets around
+  FLAGS_enable_load_balancing = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   FLAGS_cdc_intent_retention_ms = 10000;
@@ -3871,6 +3892,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderChange))
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderReElect)) {
+  // Disable lb as we move tablets around
+  FLAGS_enable_load_balancing = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_update_metrics_interval_ms = 1000;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
@@ -3961,6 +3984,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderReElect)
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)) {
+  // Disable lb as we move tablets around
+  FLAGS_enable_load_balancing = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
   const int num_tservers = 3;
@@ -4087,6 +4112,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKCacheWithLeaderRestart)
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKActiveTimeCacheInSyncWithCDCStateTable)) {
+  // Disable lb as we move tablets around
+  FLAGS_enable_load_balancing = false;
   FLAGS_update_min_cdc_indices_interval_secs = 1;
   FLAGS_update_metrics_interval_ms = 1000;
   FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
@@ -4267,9 +4294,10 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestColocation)) {
 
   int expected_key1 = 0;
   int expected_key2 = 0;
+  int ddl_count = 0;
+  std::unordered_set<string> ddl_tables;
   for (uint32_t i = 0; i < record_size; ++i) {
     const auto record = change_resp.cdc_sdk_proto_records(i);
-    LOG(INFO) << "Record found: " << record.ShortDebugString();
     if (record.row_message().op() == RowMessage::INSERT) {
       if (record.row_message().table() == "test1") {
         ASSERT_EQ(expected_key1, record.row_message().new_tuple(0).datum_int32());
@@ -4278,11 +4306,18 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestColocation)) {
         ASSERT_EQ(std::to_string(expected_key2), record.row_message().new_tuple(0).datum_string());
         expected_key2++;
       }
+    } else if (record.row_message().op() == RowMessage::DDL) {
+      ddl_tables.insert(record.row_message().table());
+      ddl_count++;
     }
   }
 
+  ASSERT_TRUE(ddl_tables.contains("test1"));
+  ASSERT_TRUE(ddl_tables.contains("test2"));
+
   ASSERT_EQ(insert_count, expected_key1);
   ASSERT_EQ(insert_count, expected_key2);
+  ASSERT_EQ(ddl_count, 3);
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentsInColocation)) {

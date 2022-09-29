@@ -70,7 +70,6 @@
 #include <boost/optional.hpp>
 #include <glog/logging.h>
 
-#include "yb/client/client-internal.h"
 #include "yb/client/client.h"
 #include "yb/client/schema.h"
 #include "yb/client/universe_key_client.h"
@@ -168,6 +167,7 @@
 #include "yb/tserver/tserver_error.h"
 
 #include "yb/util/atomic.h"
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/countdown_latch.h"
 #include "yb/util/debug-util.h"
 #include "yb/util/debug/trace_event.h"
@@ -291,6 +291,9 @@ DEFINE_test_flag(bool, catalog_manager_simulate_system_table_create_failure, fal
                  "This is only used in tests to simulate a failure where the table information is "
                  "persisted in syscatalog, but the tablet information is not yet persisted and "
                  "there is a failure.");
+
+DEFINE_test_flag(bool, pause_before_send_hinted_election, false,
+                 "Inside StartElectionIfReady, pause before sending request for hinted election");
 
 DEFINE_string(cluster_uuid, "", "Cluster UUID to be used by this cluster");
 TAG_FLAG(cluster_uuid, hidden);
@@ -3541,6 +3544,12 @@ Status CatalogManager::CreateTable(const CreateTableRequestPB* orig_req,
   SCHECK(!colocated || req.has_table_id(),
          InvalidArgument, "Colocated table should specify a table ID");
 
+  // Check if index is colocated and has a Tablespace specified.
+  SCHECK(
+      !colocated || !IsIndex(req) || !req.has_tablespace_id(),
+      InvalidArgument,
+      "TABLESPACE is not supported for indexes on colocated tables.");
+
   // TODO: If this is a colocated index table, convert any hash partition columns into
   // range partition columns.
   // This is because postgres does not know that this index table is in a colocated database.
@@ -4747,7 +4756,7 @@ Status CatalogManager::IsCreateTableInProgress(const TableId& table_id,
 
 Status CatalogManager::WaitForCreateTableToFinish(
     const TableId& table_id, CoarseTimePoint deadline) {
-  return client::RetryFunc(
+  return RetryFunc(
       deadline, "Waiting on Create Table to be completed", "Timed out waiting for Table Creation",
       std::bind(&CatalogManager::IsCreateTableInProgress, this, table_id, _1, _2));
 }
@@ -7086,8 +7095,7 @@ bool CatalogManager::ProcessCommittedConsensusState(
     }
   }
 
-  if (FLAGS_use_create_table_leader_hint &&
-      !cstate.has_leader_uuid() && cstate.current_term() == kMinimumTerm) {
+  if (FLAGS_use_create_table_leader_hint && !cstate.has_leader_uuid()) {
     StartElectionIfReady(cstate, tablet.get());
   }
 
@@ -8996,9 +9004,7 @@ Status CatalogManager::DisableTabletSplitting(
   return Status::OK();
 }
 
-Status CatalogManager::IsTabletSplittingComplete(
-    const IsTabletSplittingCompleteRequestPB* req, IsTabletSplittingCompleteResponsePB* resp,
-    rpc::RpcContext* rpc) {
+bool CatalogManager::IsTabletSplittingCompleteInternal(bool wait_for_parent_deletion) {
   vector<TableInfoPtr> tables;
   {
     SharedLock lock(mutex_);
@@ -9008,12 +9014,18 @@ Status CatalogManager::IsTabletSplittingComplete(
     }
   }
   for (const auto& table : tables) {
-    if (!tablet_split_manager_.IsTabletSplittingComplete(*table, req->wait_for_parent_deletion())) {
-      resp->set_is_tablet_splitting_complete(false);
-      return Status::OK();
+    if (!tablet_split_manager_.IsTabletSplittingComplete(*table, wait_for_parent_deletion)) {
+      return false;
     }
   }
-  resp->set_is_tablet_splitting_complete(true);
+  return true;
+}
+
+Status CatalogManager::IsTabletSplittingComplete(
+    const IsTabletSplittingCompleteRequestPB* req, IsTabletSplittingCompleteResponsePB* resp,
+    rpc::RpcContext* rpc) {
+  resp->set_is_tablet_splitting_complete(
+      IsTabletSplittingCompleteInternal(req->wait_for_parent_deletion()));
   return Status::OK();
 }
 
@@ -10390,6 +10402,7 @@ Status CatalogManager::SendCreateTabletRequests(const vector<TabletInfo*>& table
 void CatalogManager::StartElectionIfReady(
     const consensus::ConsensusStatePB& cstate, TabletInfo* tablet) {
   auto replicas = tablet->GetReplicaLocations();
+  bool initial_election = cstate.current_term() == kMinimumTerm;
   int num_voters = 0;
   for (const auto& peer : cstate.config().peers()) {
     if (peer.member_type() == PeerMemberType::VOTER) {
@@ -10457,6 +10470,8 @@ void CatalogManager::StartElectionIfReady(
     return;
   }
 
+  TEST_PAUSE_IF_FLAG(TEST_pause_before_send_hinted_election);
+
   if (!tablet->InitiateElection()) {
     VLOG_WITH_PREFIX(4) << __func__ << ": Already initiated";
     return;
@@ -10467,7 +10482,8 @@ void CatalogManager::StartElectionIfReady(
   LOG_WITH_PREFIX(INFO)
       << "Starting election at " << tablet->tablet_id() << " in favor of " << protege;
 
-  auto task = std::make_shared<AsyncStartElection>(master_, AsyncTaskPool(), protege, tablet);
+  auto task = std::make_shared<AsyncStartElection>(
+      master_, AsyncTaskPool(), protege, tablet, initial_election);
   tablet->table()->AddTask(task);
   WARN_NOT_OK(task->Run(), "Failed to send new tablet start election request");
 }
@@ -11177,8 +11193,12 @@ Status CatalogManager::IsLoadBalanced(const IsLoadBalancedRequestPB* req,
   return Status::OK();
 }
 
-Status CatalogManager::IsLoadBalancerIdle(const IsLoadBalancerIdleRequestPB* req,
-                                          IsLoadBalancerIdleResponsePB* resp) {
+MonoTime CatalogManager::LastLoadBalancerRunTime() const {
+  return load_balance_policy_->LastRunTime();
+}
+
+Status CatalogManager::IsLoadBalancerIdle(
+    const IsLoadBalancerIdleRequestPB* req, IsLoadBalancerIdleResponsePB* resp) {
   Status s = load_balance_policy_->IsIdle();
   if (!s.ok()) {
     return SetupError(resp->mutable_error(), MasterErrorPB::LOAD_BALANCER_RECENTLY_ACTIVE, s);
