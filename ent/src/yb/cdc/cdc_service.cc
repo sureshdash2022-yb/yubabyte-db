@@ -1457,7 +1457,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
 }
 
 Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
-    const TabletId& tablet_id, const TabletCDCCheckpointInfo& cdc_checkpoint_min) {
+    const TabletId& tablet_id, const TabletCDCCheckpointInfo& cdc_checkpoint_min, bool bootstrap) {
   std::vector<client::internal::RemoteTabletServer *> servers;
   RETURN_NOT_OK(GetTServers(tablet_id, &servers));
 
@@ -1471,6 +1471,7 @@ Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
     UpdateCdcReplicatedIndexRequestPB update_index_req;
     UpdateCdcReplicatedIndexResponsePB update_index_resp;
     update_index_req.add_tablet_ids(tablet_id);
+    //update_index_req.add_boo
     update_index_req.add_replicated_indices(cdc_checkpoint_min.cdc_op_id.index);
     update_index_req.add_replicated_terms(cdc_checkpoint_min.cdc_op_id.term);
     cdc_checkpoint_min.cdc_sdk_op_id.ToPB(update_index_req.add_cdc_sdk_consumed_ops());
@@ -2850,7 +2851,7 @@ Status CDCServiceImpl::BootstrapProducerHelper(
       }
       // Even though we let each log independently take care of updating its own log checkpoint,
       // we still call the Update RPC when we create the replication stream.
-      RETURN_NOT_OK(UpdatePeersCdcMinReplicatedIndex(tablet.tablet_id(), op_id_min));
+      RETURN_NOT_OK(UpdatePeersCdcMinReplicatedIndex(tablet.tablet_id(), op_id_min, true));
 
       const auto op = cdc_state_table->NewWriteOp(QLWriteRequestPB::QL_STMT_INSERT);
       auto *const write_req = op->mutable_request();

@@ -70,7 +70,7 @@
 #include "yb/util/stol_utils.h"
 #include "yb/util/test_macros.h"
 #include "yb/util/thread.h"
-
+#include "yb/tablet/tablet_types.pb.h"
 #include "yb/yql/cql/ql/util/errcodes.h"
 #include "yb/yql/cql/ql/util/statement_result.h"
 
@@ -4331,6 +4331,59 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentsInColocation)) {
 
   ASSERT_EQ(insert_count, expected_key1);
   ASSERT_EQ(insert_count, expected_key2);
+}
+
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentGCedWithTabletBootStrap)) {
+  FLAGS_update_min_cdc_indices_interval_secs = 1;
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  size_t first_leader_index = 0;
+  size_t first_follower_index = 0;
+  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
+
+  // Insert some records.
+  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  // Restart of the tsever will make Tablet Bootstrap.
+  //test_cluster()->mini_tablet_server(0)->Shutdown();
+  //ASSERT_OK(test_cluster()->mini_tablet_server(0)->RestartStoppedServer());
+#if 1
+  // Here testcase behave like a WAL cleaner thread.
+  for (size_t i = 0; i < test_cluster()->num_tablet_servers(); i++) {
+    for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
+      if (tablet_peer->tablet_id() == tablets[0].tablet_id()) {
+        ASSERT_OK(tablet_peer->UpdateState(
+            tablet::RaftGroupStatePB::RUNNING, tablet::RaftGroupStatePB::BOOTSTRAPPING,
+            "Incorrect state to start TabletPeer, "));
+      }
+    }
+  }
+#endif
+  SleepFor(MonoDelta::FromSeconds(10));
+  GetChangesResponsePB change_resp;
+  auto result = GetChangesFromCDC(stream_id, tablets);
+  if (!result.ok()) {
+    LOG(INFO) << "suresh: Getchange Failure with error: " << result->error().status().DebugString();
+    return;
+  }
+  uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+  ASSERT_GE(record_size, 100);
+  LOG(INFO) << "Total records read by GetChanges call on stream_id_1: " << record_size;
 }
 
 }  // namespace enterprise

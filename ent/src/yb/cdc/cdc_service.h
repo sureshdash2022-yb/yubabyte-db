@@ -273,7 +273,7 @@ class CDCServiceImpl : public CDCServiceIf {
 
   Status UpdatePeersCdcMinReplicatedIndex(
       const TabletId& tablet_id,
-      const TabletCDCCheckpointInfo& cdc_checkpoint_min);
+      const TabletCDCCheckpointInfo& cdc_checkpoint_min, bool bootstrap = false);
 
   // Used as a callback function for parallelizing async cdc rpc calls.
   // Given a finished tasks counter, and the number of total rpc calls
