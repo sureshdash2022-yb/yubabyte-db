@@ -56,6 +56,8 @@
 #include "yb/tserver/tserver_service.pb.h"
 #include "yb/tserver/tserver_service.proxy.h"
 
+#include "yb/util/backoff_waiter.h"
+
 #include "yb/yql/cql/ql/util/statement_result.h"
 
 DECLARE_int32(cleanup_split_tablets_interval_sec);
@@ -805,6 +807,17 @@ Status TabletSplitITest::CheckPostSplitTabletReplicasData(
     }
   }
   return Status::OK();
+}
+
+Status TabletSplitITest::WaitForTableNumActiveLeadersPeers(size_t expected_leaders) {
+  return WaitFor(
+      [&]() -> Result<bool> {
+        const auto peers = ListTableActiveTabletLeadersPeers(cluster_.get(), table_->id());
+        LOG(INFO) << "Check number of leaders: " << peers.size();
+        return peers.size() == expected_leaders;
+      },
+      20s * kTimeMultiplier,
+      Format("Waiting table $0 to have $1 leaders ...", table_->id(), expected_leaders));
 }
 
 //
