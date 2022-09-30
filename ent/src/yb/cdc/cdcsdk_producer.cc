@@ -882,17 +882,19 @@ Status GetChangesForCDCSDK(
              *cached_schema_version != msg->change_metadata_request().schema_version())) {
           auto result = client->GetTableSchemaFromSysCatalog(
               tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
+          // Failed to get specific schema version from the system catalog, use the latest
+          // schema version for the key-value decoding.
           if (!result.ok()) {
-            LOG(ERROR)
+            current_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
+            *cached_schema_version = tablet_peer->tablet()->metadata()->schema_version();
+            LOG(WARNING)
                 << "Failed to get the specific schema version from system catalog for table: "
-                << tablet_peer->tablet()->metadata()->table_name();
-            return STATUS_FORMAT(
-                InternalError,
-                "Failed to get the specific schema version from system catalog for table: $0",
-                tablet_peer->tablet()->metadata()->table_name());
+                << tablet_peer->tablet()->metadata()->table_name()
+                << " proceedings with the latest schema version.";
+          } else {
+            current_schema = result->first;
+            *cached_schema_version = result->second;
           }
-          current_schema = result->first;
-          *cached_schema_version = result->second;
           const std::string& table_name = tablet_peer->tablet()->metadata()->table_name();
           schema_streamed = true;
 
@@ -966,14 +968,10 @@ Status GetChangesForCDCSDK(
             auto result = client->GetTableSchemaFromSysCatalog(
                 tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
             if (!result.ok()) {
-              LOG(ERROR)
+              LOG(WARNING)
                   << "Failed to get the specific schema version from system catalog for table: "
-                  << tablet_peer->tablet()->metadata()->table_name();
-              return STATUS_FORMAT(
-                  InternalError,
-                  "Failed to get the specific schema version from system catalog for table: $0",
-                  tablet_peer->tablet()->metadata()->table_name());
-
+                  << tablet_peer->tablet()->metadata()->table_name()
+                  << " proceedings with the table schema version got with CHANGE_METADATA_OP.";
             } else if (*cached_schema_version != result->second) {
               *cached_schema = std::make_shared<Schema>(std::move(result->first));
               *cached_schema_version = result->second;
