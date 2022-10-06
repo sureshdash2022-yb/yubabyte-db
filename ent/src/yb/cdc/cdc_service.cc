@@ -1781,7 +1781,7 @@ Result<TabletIdCDCCheckpointMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
       last_replicated_time_str = timestamp_ql_value.timestamp_value().ToFormattedString();
     }
 
-    int64_t last_active_time_cdc_state_table;
+    int64_t last_active_time_cdc_state_table = std::numeric_limits<int64_t>::min();
     if (!row.column(4).IsNull()) {
       last_active_time_cdc_state_table = VERIFY_RESULT(
             CheckedStoInt<int64_t>(row.column(4).map_value().values(0).string_value()));
@@ -1835,6 +1835,13 @@ Result<TabletIdCDCCheckpointMap> CDCServiceImpl::PopulateTabletCheckPointInfo(
     // Don't consider those inactive stream for the min_checkpoint calculation.
     int64_t latest_active_time = 0;
     if (record.source_type == CDCSDK) {
+      // Support backward compatibility, where active_time as not part of cdc_state table.
+      if (last_active_time_cdc_state_table == std::numeric_limits<int64_t>::min()) {
+        LOG(WARNING) << "In previous server version, active time was not part of cdc_state table,"
+                        "as part upgrade forcefully update active time for the tablet_id: "
+                     << tablet_id;
+        last_active_time_cdc_state_table = GetCurrentTimeMicros();
+      }
       auto session = client()->NewSession();
       auto status = CheckStreamActive(producer_tablet, session, last_active_time_cdc_state_table);
       if (!status.ok()) {
