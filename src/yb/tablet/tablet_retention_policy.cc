@@ -49,7 +49,7 @@ DEFINE_int32(timestamp_history_retention_interval_sec, 900,
              "Set this to be higher than the expected maximum duration of any single transaction "
              "in your application.");
 
-DEFINE_int32(cdc_syscatalog_history_retention_interval_sec, 4 * 3600,
+DEFINE_int32(timestamp_syscatalog_history_retention_interval_sec, 4 * 3600,
     "The time interval in seconds to retain syscatalog history for CDC to read specific schema "
     "version. Point-in-time reads at a hybrid time further than this in the past might not be "
     "allowed after a compaction. Set this to be higher than the expected maximum duration of any "
@@ -152,17 +152,17 @@ HybridTime TabletRetentionPolicy::HistoryCutoffToPropagate(HybridTime last_write
 HybridTime TabletRetentionPolicy::EffectiveHistoryCutoff() {
   auto retention_delta =
       -ANNOTATE_UNPROTECTED_READ(FLAGS_timestamp_history_retention_interval_sec) * 1s;
-  auto retention_deleta_syscatalog =
-      -ANNOTATE_UNPROTECTED_READ(FLAGS_cdc_syscatalog_history_retention_interval_sec) * 1s;
+  auto retention_delta_syscatalog =
+      -ANNOTATE_UNPROTECTED_READ(FLAGS_timestamp_syscatalog_history_retention_interval_sec) * 1s;
   HybridTime allowed_cutoff;
   // We try to garbage-collect history older than current time minus the configured retention
   // interval, but we might not be able to do so if there are still read operations reading at an
   // older snapshot.
   allowed_cutoff = SanitizeHistoryCutoff(clock_->Now().AddDelta(retention_delta));
   if (metadata_.table_id() == kObsoleteShortPrimaryTableId &&
-      retention_deleta_syscatalog.count() != 0) {
+      retention_delta_syscatalog.count() != 0) {
     allowed_cutoff = min(
-        allowed_cutoff, SanitizeHistoryCutoff(clock_->Now().AddDelta(retention_deleta_syscatalog)));
+        allowed_cutoff, SanitizeHistoryCutoff(clock_->Now().AddDelta(retention_delta_syscatalog)));
   }
   return allowed_cutoff;
 }

@@ -203,7 +203,7 @@ struct CDCStateMetadataInfo {
   mutable std::string commit_timestamp;
   mutable std::shared_ptr<Schema>  current_schema;
   mutable OpId last_streamed_op_id;
-  mutable uint32_t current_schema_version;
+  mutable SchemaVersion current_schema_version;
 
   std::shared_ptr<MemTracker> mem_tracker;
 

@@ -207,10 +207,10 @@ Status PopulateCDCSDKIntentRecord(
     ScopedTrackedConsumption* consumption,
     IntraTxnWriteId* write_id,
     std::string* reverse_index_key,
-    Schema* old_schema) {
+    Schema* old_schema,
+    SchemaVersion schema_version) {
   bool colocated = tablet_peer->tablet()->metadata()->colocated();
-  Schema& schema = old_schema ? *old_schema : *tablet_peer->tablet()->schema();
-  SchemaVersion schema_version = tablet_peer->tablet()->metadata()->schema_version();
+  Schema& schema = *old_schema;
   std::string table_name = tablet_peer->tablet()->metadata()->table_name();
   SchemaPackingStorage schema_packing_storage;
   schema_packing_storage.AddSchema(schema_version, schema);
@@ -583,7 +583,9 @@ Status ProcessIntents(
     const std::shared_ptr<tablet::TabletPeer>& tablet_peer,
     std::vector<docdb::IntentKeyValueForCDC>* keyValueIntents,
     docdb::ApplyTransactionState* stream_state,
-    Schema* schema) {
+    client::YBClient* client,
+    std::shared_ptr<Schema>* cached_schema,
+    SchemaVersion* cached_schema_version) {
   if (stream_state->key.empty() && stream_state->write_id == 0) {
     CDCSDKProtoRecordPB* proto_record = resp->add_cdc_sdk_proto_records();
     RowMessage* row_message = proto_record->mutable_row_message();
@@ -609,11 +611,29 @@ Status ProcessIntents(
         transaction_id);
   }
 
+  Schema current_schema = **cached_schema;
   for (auto& keyValue : *keyValueIntents) {
     docdb::SubDocKey sub_doc_key;
     CHECK_OK(
         sub_doc_key.FullyDecodeFrom(Slice(keyValue.key_buf), docdb::HybridTimeRequired::kFalse));
-
+    if (!(**cached_schema).initialized()) {
+      auto result = client->GetTableSchemaFromSysCatalog(
+          tablet_peer->tablet()->metadata()->table_id(),
+          keyValue.intent_ht.hybrid_time().ToUint64());
+      // Failed to get specific schema version from the system catalog, use the latest
+      // schema version for the key-value decoding.
+      if (!result.ok()) {
+        current_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
+        *cached_schema_version = tablet_peer->tablet()->metadata()->schema_version();
+        LOG(WARNING) << "Failed to get the specific schema version from system catalog for table: "
+                     << tablet_peer->tablet()->metadata()->table_name()
+                     << " proceedings with the latest schema version.";
+      } else {
+        current_schema = result->first;
+        *cached_schema_version = result->second;
+        *cached_schema = std::make_shared<Schema>(result->first);
+      }
+    }
     Slice value_slice = keyValue.value_buf;
     RETURN_NOT_OK(docdb::ValueControlFields::Decode(&value_slice));
     auto value_type = docdb::DecodeValueEntryType(value_slice);
@@ -629,7 +649,7 @@ Status ProcessIntents(
   // Need to populate the CDCSDKRecords
   RETURN_NOT_OK(PopulateCDCSDKIntentRecord(
       op_id, transaction_id, *keyValueIntents, metadata, tablet_peer, enum_oid_label_map, resp,
-      consumption, &write_id, &reverse_index_key, schema));
+      consumption, &write_id, &reverse_index_key, &current_schema, *cached_schema_version));
 
   SetTermIndex(op_id.term, op_id.index, checkpoint);
 
@@ -735,7 +755,7 @@ Status GetChangesForCDCSDK(
     GetChangesResponsePB* resp,
     std::string* commit_timestamp,
     std::shared_ptr<Schema>* cached_schema,
-    uint32_t* cached_schema_version,
+    SchemaVersion* cached_schema_version,
     OpId* last_streamed_op_id,
     client::YBClient* client,
     int64_t* last_readable_opid_index,
@@ -849,7 +869,8 @@ Status GetChangesForCDCSDK(
 
     RETURN_NOT_OK(ProcessIntents(
         op_id, transaction_id, stream_metadata, enum_oid_label_map, resp, &consumption, &checkpoint,
-        tablet_peer, &keyValueIntents, &stream_state, nullptr));
+        tablet_peer, &keyValueIntents, &stream_state, client, cached_schema,
+        cached_schema_version));
 
     if (checkpoint.write_id() == 0 && checkpoint.key().empty()) {
       last_streamed_op_id->term = checkpoint.term();
@@ -892,8 +913,7 @@ Status GetChangesForCDCSDK(
       for (const auto& msg : read_ops.messages) {
         last_seen_op_id.term = msg->id().term();
         last_seen_op_id.index = msg->id().index();
-        if (!schema_streamed && (!(**cached_schema).initialized() ||
-                                 *cached_schema_version != read_ops.header_schema_version)) {
+        if (!schema_streamed && !(**cached_schema).initialized()) {
           auto result = client->GetTableSchemaFromSysCatalog(
               tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
           // Failed to get specific schema version from the system catalog, use the latest
@@ -932,7 +952,8 @@ Status GetChangesForCDCSDK(
               op_id.index = msg->id().index();
               RETURN_NOT_OK(ProcessIntents(
                   op_id, txn_id, stream_metadata, enum_oid_label_map, resp, &consumption,
-                  &checkpoint, tablet_peer, &intents, &new_stream_state, &current_schema));
+                  &checkpoint, tablet_peer, &intents, &new_stream_state, client, cached_schema,
+                  cached_schema_version));
 
               if (new_stream_state.write_id != 0 && !new_stream_state.key.empty()) {
                 pending_intents = true;
@@ -977,17 +998,17 @@ Status GetChangesForCDCSDK(
                   << tablet_peer->tablet()->metadata()->table_name()
                   << " proceedings with the table schema version got with CHANGE_METADATA_OP.";
             } else if (*cached_schema_version != result->second) {
-              *cached_schema = std::make_shared<Schema>(std::move(result->first));
+              current_schema = result->first;
+              *cached_schema = std::make_shared<Schema>(result->first);
               *cached_schema_version = result->second;
             }
-
             if ((resp->cdc_sdk_proto_records_size() > 0 &&
                  resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
                          .row_message()
                          .op() == RowMessage_Op_DDL)) {
               if ((resp->cdc_sdk_proto_records(resp->cdc_sdk_proto_records_size() - 1)
                        .row_message()
-                       .schema_version() != msg->change_metadata_request().schema_version())) {
+                       .schema_version() != *cached_schema_version)) {
                 RETURN_NOT_OK(PopulateCDCSDKDDLRecord(
                     msg, resp->add_cdc_sdk_proto_records(), table_name, current_schema));
               }
