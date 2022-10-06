@@ -207,10 +207,12 @@ Status PopulateCDCSDKIntentRecord(
     ScopedTrackedConsumption* consumption,
     IntraTxnWriteId* write_id,
     std::string* reverse_index_key,
-    Schema* old_schema) {
+    Schema* old_schema,
+    SchemaVersion* old_schema_version) {
   bool colocated = tablet_peer->tablet()->metadata()->colocated();
   Schema& schema = old_schema ? *old_schema : *tablet_peer->tablet()->schema();
-  SchemaVersion schema_version = tablet_peer->tablet()->metadata()->schema_version();
+  SchemaVersion schema_version =
+      old_schema ? old_schema_version: tablet_peer->tablet()->metadata()->schema_version();
   std::string table_name = tablet_peer->tablet()->metadata()->table_name();
   SchemaPackingStorage schema_packing_storage;
   schema_packing_storage.AddSchema(schema_version, schema);
@@ -583,7 +585,9 @@ Status ProcessIntents(
     const std::shared_ptr<tablet::TabletPeer>& tablet_peer,
     std::vector<docdb::IntentKeyValueForCDC>* keyValueIntents,
     docdb::ApplyTransactionState* stream_state,
-    Schema* schema) {
+    client::YBClient* client,
+    std::shared_ptr<Schema>* cached_schema,
+    SchemaVersion* cached_schema_version) {
   if (stream_state->key.empty() && stream_state->write_id == 0) {
     CDCSDKProtoRecordPB* proto_record = resp->add_cdc_sdk_proto_records();
     RowMessage* row_message = proto_record->mutable_row_message();
@@ -615,13 +619,32 @@ Status ProcessIntents(
         sub_doc_key.FullyDecodeFrom(Slice(keyValue.key_buf), docdb::HybridTimeRequired::kFalse));
 
     Slice value_slice = keyValue.value_buf;
-    RETURN_NOT_OK(docdb::ValueControlFields::Decode(&value_slice));
-    auto value_type = docdb::DecodeValueEntryType(value_slice);
-    if (value_type != docdb::ValueEntryType::kPackedRow) {
-      docdb::Value decoded_value;
-      RETURN_NOT_OK(decoded_value.Decode(Slice(keyValue.value_buf)));
+    Schema old_schema;
+    SchemaVersion old_schema_version;
+    if (!(**schema).initialized()) {
+      auto result = client->GetTableSchemaFromSysCatalog(
+          tablet_peer->tablet()->metadata()->table_id(), keyValue.intent_ht.hybrid_time().ToUint64());
+      // Failed to get specific schema version from the system catalog, use the latest
+      // schema version for the key-value decoding.
+      if (!result.ok()) {
+        old_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
+        old_schema_version = tablet_peer->tablet()->metadata()->schema_version();
+        LOG(WARNING) << "Failed to get the specific schema version from system catalog for table: "
+                     << tablet_peer->tablet()->metadata()->table_name()
+                     << " proceedings with the latest schema version.";
+      } else {
+        old_schema = result->first;
+        old_schema_version = cached_schema_version = result->second;
+        *cached_schema = std::make_shared<Schema>(std::move(old_schema));
+      }
     }
-  }
+      RETURN_NOT_OK(docdb::ValueControlFields::Decode(&value_slice));
+      auto value_type = docdb::DecodeValueEntryType(value_slice);
+      if (value_type != docdb::ValueEntryType::kPackedRow) {
+        docdb::Value decoded_value;
+        RETURN_NOT_OK(decoded_value.Decode(Slice(keyValue.value_buf)));
+      }
+    }
 
   std::string reverse_index_key;
   IntraTxnWriteId write_id = 0;
@@ -849,7 +872,7 @@ Status GetChangesForCDCSDK(
 
     RETURN_NOT_OK(ProcessIntents(
         op_id, transaction_id, stream_metadata, enum_oid_label_map, resp, &consumption, &checkpoint,
-        tablet_peer, &keyValueIntents, &stream_state, nullptr));
+        tablet_peer, &keyValueIntents, &stream_state, client, cached_schema, cached_schema_version));
 
     if (checkpoint.write_id() == 0 && checkpoint.key().empty()) {
       last_streamed_op_id->term = checkpoint.term();
@@ -932,7 +955,8 @@ Status GetChangesForCDCSDK(
               op_id.index = msg->id().index();
               RETURN_NOT_OK(ProcessIntents(
                   op_id, txn_id, stream_metadata, enum_oid_label_map, resp, &consumption,
-                  &checkpoint, tablet_peer, &intents, &new_stream_state, &current_schema));
+                  &checkpoint, tablet_peer, &intents, &new_stream_state, client, cached_schema,
+                  cached_schema_version));
 
               if (new_stream_state.write_id != 0 && !new_stream_state.key.empty()) {
                 pending_intents = true;
