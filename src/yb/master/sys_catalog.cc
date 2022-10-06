@@ -765,30 +765,31 @@ Status SysCatalogTable::GetTableSchema(
         found_entry_type.int8_value(), SysRowEntryType::TABLE, Corruption,
         "Found wrong entry type");
     RETURN_NOT_OK(value_map.GetValue(schema.column_id(entry_id_col_idx), &entry_id));
-    RETURN_NOT_OK(value_map.GetValue(schema.column_id(metadata_col_idx), &metadata));
-    SCHECK_EQ(metadata.type(), InternalType::kBinaryValue, Corruption, "Found wrong metadata type");
-    const Slice& binary_value = metadata.binary_value();
     const Slice& entry_id_value = entry_id.binary_value();
     string entry_id_name;
 
-    SysTablesEntryPB metadata_pb;
-    RETURN_NOT_OK_PREPEND(
-        pb_util::ParseFromArray(&metadata_pb, binary_value.data(), binary_value.size()),
-        "Unable to parse metadata field for table_id: " + entry_id_value.ToBuffer());
     if (table_id == entry_id_value.ToBuffer()) {
-      auto table = make_scoped_refptr<TableInfo>(table_id);
-      auto l = table->LockForWrite();
-      l.mutable_data()->pb.CopyFrom(metadata_pb);
-      RETURN_NOT_OK(SchemaFromPB(l.mutable_data()->pb.schema(), current_schema));
-      *schema_version = l.mutable_data()->pb.version();
-      l.Commit();
+      RETURN_NOT_OK(value_map.GetValue(schema.column_id(metadata_col_idx), &metadata));
+      SCHECK_EQ(
+          metadata.type(), InternalType::kBinaryValue, Corruption, "Found wrong metadata type");
+      const Slice& binary_value = metadata.binary_value();
+      const Slice& entry_id_value = entry_id.binary_value();
+
+      SysTablesEntryPB metadata_pb;
+      RETURN_NOT_OK_PREPEND(
+          pb_util::ParseFromArray(&metadata_pb, binary_value.data(), binary_value.size()),
+          "Unable to parse metadata field for table_id: " + entry_id_value.ToBuffer());
+
+      RETURN_NOT_OK(SchemaFromPB(metadata_pb.schema(), current_schema));
+      *schema_version = metadata_pb.version();
       VLOG(1) << "Found table_id: " << entry_id_value.ToBuffer()
               << " specific schema version from system catalog table: "
-              << l->schema().DebugString();
+              << metadata_pb.schema().DebugString();
       table_schema_found = true;
       break;
     }
   }
+
   if (!table_schema_found) {
     return STATUS_FORMAT(
         NotFound, "Failed to get specific schema version for table: $0 from system catalog",

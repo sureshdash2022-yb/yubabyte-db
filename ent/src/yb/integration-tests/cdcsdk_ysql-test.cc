@@ -4960,6 +4960,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleAlterWithRestar
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMultipleAlterWithTabletLeaderSwitch)) {
   const int num_tservers = 3;
+  FLAGS_enable_load_balancing = false;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
   const uint32_t num_tablets = 1;
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
@@ -5048,7 +5049,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterWithSysCatalogComp
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
   ASSERT_EQ(tablets.size(), num_tablets);
-  FLAGS_timestamp_history_retention_interval_sec = 1000;
+  FLAGS_timestamp_history_retention_interval_sec = 0;
 
   // Insert some records in transaction.
   ASSERT_OK(WriteRows(1 /* start */, 101 /* end */, &test_cluster_, {kValue2ColumnName}));

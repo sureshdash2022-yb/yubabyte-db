@@ -694,13 +694,12 @@ Status PopulateCDCSDKSnapshotRecord(
 }
 
 void FillDDLInfo(
-    const std::shared_ptr<tablet::TabletPeer>& tablet_peer, GetChangesResponsePB* resp) {
+    const std::shared_ptr<tablet::TabletPeer>& tablet_peer, const Schema& current_schema,
+    const SchemaVersion current_schema_version, GetChangesResponsePB* resp) {
   for (auto const& table_id : tablet_peer->tablet_metadata()->GetAllColocatedTables()) {
     auto table_name = tablet_peer->tablet()->metadata()->table_name(table_id);
-    auto schema_version = tablet_peer->tablet()->metadata()->schema_version(table_id);
-    Schema schema = *tablet_peer->tablet()->metadata()->schema(table_id).get();
     SchemaPB schema_pb;
-    SchemaToPB(schema, &schema_pb);
+    SchemaToPB(current_schema, &schema_pb);
     CDCSDKProtoRecordPB* proto_record = resp->add_cdc_sdk_proto_records();
     RowMessage* row_message = proto_record->mutable_row_message();
     row_message->set_op(RowMessage_Op_DDL);
@@ -711,7 +710,7 @@ void FillDDLInfo(
       SetColumnInfo(column, column_info);
     }
 
-    row_message->set_schema_version(schema_version);
+    row_message->set_schema_version(current_schema_version);
     row_message->set_pgschema_name(schema_pb.pgschema_name());
     CDCSDKTablePropertiesPB* cdc_sdk_table_properties_pb =
         row_message->mutable_schema()->mutable_tab_info();
@@ -788,8 +787,23 @@ Status GetChangesForCDCSDK(
       VLOG(1) << "The after snapshot term " << from_op_id.term() << "index  " << from_op_id.index()
               << "key " << from_op_id.key() << "snapshot time " << from_op_id.snapshot_time();
 
-      FillDDLInfo(tablet_peer, resp);
-      Schema schema = *tablet_peer->tablet()->metadata()->schema().get();
+      Schema schema;
+      SchemaVersion schema_version;
+      auto result = client->GetTableSchemaFromSysCatalog(
+          tablet_peer->tablet()->metadata()->table_id(), from_op_id.snapshot_time());
+      // Failed to get specific schema version from the system catalog, use the latest
+      // schema version for the key-value decoding.
+      if (!result.ok()) {
+        schema = *tablet_peer->tablet()->schema().get();
+        schema_version = tablet_peer->tablet()->metadata()->schema_version();
+        LOG(WARNING) << "Failed to get the specific schema version from system catalog for table: "
+                     << tablet_peer->tablet()->metadata()->table_name()
+                     << " proceedings with the latest schema version.";
+      } else {
+        schema = result->first;
+        schema_version = result->second;
+      }
+      FillDDLInfo(tablet_peer, schema, schema_version, resp);
 
       int limit = FLAGS_cdc_snapshot_batch_size;
       int fetched = 0;
@@ -878,9 +892,8 @@ Status GetChangesForCDCSDK(
       for (const auto& msg : read_ops.messages) {
         last_seen_op_id.term = msg->id().term();
         last_seen_op_id.index = msg->id().index();
-        if ((!schema_streamed && !(**cached_schema).initialized()) ||
-            (msg->change_metadata_request().has_schema_version() &&
-             *cached_schema_version != msg->change_metadata_request().schema_version())) {
+        if (!schema_streamed && (!(**cached_schema).initialized() ||
+                                 *cached_schema_version != read_ops.header_schema_version)) {
           auto result = client->GetTableSchemaFromSysCatalog(
               tablet_peer->tablet()->metadata()->table_id(), msg->hybrid_time());
           // Failed to get specific schema version from the system catalog, use the latest
@@ -896,10 +909,9 @@ Status GetChangesForCDCSDK(
             current_schema = result->first;
             *cached_schema_version = result->second;
           }
-          const std::string& table_name = tablet_peer->tablet()->metadata()->table_name();
           schema_streamed = true;
           *cached_schema = std::make_shared<Schema>(std::move(current_schema));
-          FillDDLInfo(tablet_peer, resp);
+          FillDDLInfo(tablet_peer, current_schema, *cached_schema_version, resp);
         } else {
           current_schema = **cached_schema;
         }

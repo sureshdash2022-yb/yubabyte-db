@@ -305,6 +305,7 @@ class CDCServiceImpl::Impl {
     if (it != cdc_state_metadata_.end()) {
       if (need_schema_info) {
         it->current_schema = std::make_shared<Schema>();
+        it->current_schema_version = std::numeric_limits<uint32_t>::max();
       }
       return make_pair(it->current_schema_version, it->current_schema);
     }
@@ -313,11 +314,20 @@ class CDCServiceImpl::Impl {
         .commit_timestamp = {},
         .current_schema = std::make_shared<Schema>(),
         .last_streamed_op_id = OpId(),
-        .current_schema_version = std::numeric_limits<uint32_t>::min(),
+        .current_schema_version = std::numeric_limits<uint32_t>::max(),
         .mem_tracker = nullptr,
     };
     cdc_state_metadata_.emplace(info);
     return {info.current_schema_version, info.current_schema};
+  }
+
+  boost::optional<OpId> GetLastStreamedOpId(const ProducerTabletInfo& producer_tablet) {
+    SharedLock<rw_spinlock> lock(mutex_);
+    auto it = cdc_state_metadata_.find(producer_tablet);
+    if (it != cdc_state_metadata_.end()) {
+      return it->last_streamed_op_id;
+    }
+    return boost::none;
   }
 
   void AddTabletCheckpoint(
@@ -350,15 +360,6 @@ class CDCServiceImpl::Impl {
         .cdc_state_checkpoint = {op_id, time, active_time},
         .sent_checkpoint = {op_id, time, active_time},
         .mem_tracker = nullptr});
-  }
-
-  boost::optional<OpId> GetLastSentCheckpoint(const ProducerTabletInfo& producer_tablet) {
-    SharedLock<rw_spinlock> lock(mutex_);
-    auto it = tablet_checkpoints_.find(producer_tablet);
-    if (it != tablet_checkpoints_.end()) {
-      return it->sent_checkpoint.op_id;
-    }
-    return boost::none;
   }
 
   void EraseTablets(const std::vector<ProducerTabletInfo>& producer_entries_modified,
@@ -547,6 +548,7 @@ class CDCServiceImpl::Impl {
             .commit_timestamp = {},
             .current_schema = std::make_shared<Schema>(),
             .last_streamed_op_id = OpId(),
+            .current_schema_version = std::numeric_limits<uint32_t>::max(),
             .mem_tracker = nullptr,
         });
         // If this is the tablet that the user requested.
@@ -1395,7 +1397,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     auto cached_schema_info = impl_->GetOrAddSchema(producer_tablet, req->need_schema_info());
     auto namespace_name = tablet_peer->tablet()->metadata()->namespace_name();
     auto& [cached_schema_version, cached_schema] = cached_schema_info;
-    auto last_sent_checkpoint = impl_->GetLastSentCheckpoint(producer_tablet);
+    auto last_sent_checkpoint = impl_->GetLastStreamedOpId(producer_tablet);
     // If from_op_id is more than the last sent op_id, it may be the stale entry and tablet
     // LEADERship change may happen.
     if (last_sent_checkpoint == boost::none ||
@@ -1404,7 +1406,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
               << *last_sent_checkpoint << " less than from_op_id: " << OpId::FromPB(cdc_sdk_op_id)
               << ", get proper schema version from system catalog.";
       cached_schema = std::make_shared<Schema>();
-      cached_schema_version = std::numeric_limits<uint32_t>::min();
+      cached_schema_version = std::numeric_limits<uint32_t>::max();
     }
     auto enum_map_result = GetEnumMapFromCache(namespace_name);
     RPC_RESULT_RETURN_ERROR(
@@ -1436,7 +1438,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     }
 
     impl_->UpdateCDCStateMetadata(
-        producer_tablet, commit_timestamp, cached_schema, last_streamed_op_id,
+        producer_tablet, commit_timestamp, cached_schema, OpId::FromPB(resp->checkpoint().op_id()),
         cached_schema_version);
   }
 
