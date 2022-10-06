@@ -91,6 +91,8 @@ DECLARE_int32(cdc_min_replicated_index_considered_stale_secs);
 DECLARE_int32(log_min_seconds_to_retain);
 DECLARE_int32(timestamp_history_retention_interval_sec);
 DECLARE_int32(cdc_syscatalog_history_retention_interval_sec);
+DECLARE_int32(cdc_max_stream_intent_records);
+DECLARE_int32(rocksdb_level0_file_num_compaction_trigger);
 
 DECLARE_bool(enable_single_record_update);
 DECLARE_bool(enable_delete_truncate_cdcsdk_table);
@@ -127,6 +129,7 @@ namespace cdc {
 namespace enterprise {
 
 YB_DEFINE_ENUM(IntentCountCompareOption, (GreaterThanOrEqualTo)(GreaterThan)(EqualTo));
+YB_DEFINE_ENUM(OpIdExpectedValue, (MaxOpId)(InvalidOpId)(ValidNonMaxOpId));
 
 class CDCSDKYsqlTest : public CDCSDKTestBase {
  public:
@@ -226,6 +229,57 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
         },
         MonoDelta::FromSeconds(timeout_secs),
         "Failed to delete stream rows from cdc_state table."));
+  }
+
+  void VerifyStreamCheckpointInCdcState(
+      client::YBClient* client, const CDCStreamId& stream_id, const TabletId& tablet_id,
+      OpIdExpectedValue op_id_expected_value = OpIdExpectedValue::ValidNonMaxOpId,
+      int timeout_secs = 120) {
+    client::TableHandle table;
+    const client::YBTableName cdc_state_table(
+        YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
+    ASSERT_OK(table.Open(cdc_state_table, client));
+
+    const auto op = table.NewReadOp();
+    auto* const req = op->mutable_request();
+    QLAddStringHashValue(req, tablet_id);
+
+    auto cond = req->mutable_where_expr()->mutable_condition();
+    cond->set_op(QLOperator::QL_OP_AND);
+    QLAddStringCondition(
+        cond, Schema::first_column_id() + master::kCdcStreamIdIdx, QL_OP_EQUAL, stream_id);
+
+    table.AddColumns({master::kCdcCheckpoint}, req);
+    auto session = client->NewSession();
+
+    ASSERT_OK(WaitFor(
+        [&]() {
+          EXPECT_OK(session->TEST_ApplyAndFlush(op));
+          auto row_block = ql::RowsResult(op.get()).GetRowBlock();
+          auto op_id_result = OpId::FromString(row_block->row(0).column(0).string_value());
+          if (!op_id_result.ok()) {
+            return false;
+          }
+          auto op_id = *op_id_result;
+
+          switch (op_id_expected_value) {
+            case OpIdExpectedValue::MaxOpId:
+              if (op_id == OpId::Max()) return true;
+              break;
+            case (OpIdExpectedValue::InvalidOpId):
+              if (op_id == OpId::Invalid()) return true;
+              break;
+            case (OpIdExpectedValue::ValidNonMaxOpId):
+              if (op_id.valid() && op_id != OpId::Max()) return true;
+              break;
+            default:
+              break;
+          }
+
+          return false;
+        },
+        MonoDelta::FromSeconds(timeout_secs),
+        "Checkpoint not OpId::Max in cdc_state table."));
   }
 
   void VerifyTransactionParticipant(const TabletId& tablet_id, const OpId& opid) {
@@ -3691,6 +3745,55 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestStreamMetaCleanUpAndDeleteStr
       MonoDelta::FromSeconds(60), "Waiting for stream metadata cleanup."));
 }
 
+TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestDeletedStreamRowRemovedEvenAfterGetChanges)) {
+  FLAGS_cdc_state_checkpoint_update_interval_ms = 0;
+  FLAGS_update_min_cdc_indices_interval_secs = 60;
+
+  ASSERT_OK(SetUpWithParams(1, 1, false));
+
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  // Insert some records in transaction.
+  ASSERT_OK(WriteRowsHelper(0 /* start */, 100 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+  GetChangesResponsePB change_resp_1 = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+
+  ASSERT_OK(WriteRowsHelper(100 /* start */, 200 /* end */, &test_cluster_, true));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  ASSERT_EQ(DeleteCDCStream(stream_id), true);
+  VerifyStreamCheckpointInCdcState(
+      test_client(), stream_id, tablets[0].tablet_id(), OpIdExpectedValue::MaxOpId);
+  LOG(INFO) << "The stream's checkpoint has been marked as OpId::Max()";
+
+  ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp_1.cdc_sdk_checkpoint()));
+  VerifyStreamCheckpointInCdcState(
+      test_client(), stream_id, tablets[0].tablet_id(), OpIdExpectedValue::ValidNonMaxOpId);
+  LOG(INFO) << "Verified that GetChanges() overwrote checkpoint from OpId::Max().";
+
+  // We shutdown the TServer so that the stream cache is cleared.
+  test_cluster()->mini_tablet_server(0)->Shutdown();
+  ASSERT_OK(test_cluster()->mini_tablet_server(0)->Start());
+  ASSERT_OK(test_cluster()->mini_tablet_server(0)->WaitStarted());
+
+  // We verify that the row is deleted even after GetChanges() overwrote the OpId from Max.
+  VerifyStreamDeletedFromCdcState(test_client(), stream_id, tablets[0].tablet_id());
+}
+
 // Here we are creating a table test_table_1 and a CDC stream ex:- stream-id-1.
 // Now create another table test_table_2 and create another stream ex:- stream-id-2 on the same
 // namespace. stream-id-1 and stream-id-2 are now associated with test_table_1. drop test_table_1,
@@ -5042,6 +5145,10 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterWithSysCatalogComp
   const int num_tservers = 1;
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
   const uint32_t num_tablets = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_timestamp_history_retention_interval_sec) = 0;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_rocksdb_level0_file_num_compaction_trigger) = 0;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_syscatalog_history_retention_interval_sec) = 0;
+
   auto table = ASSERT_RESULT(CreateTable(
       &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, false, "", "public",
       3, {kValue2ColumnName}));
@@ -5049,7 +5156,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterWithSysCatalogComp
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
   ASSERT_EQ(tablets.size(), num_tablets);
-  FLAGS_timestamp_history_retention_interval_sec = 0;
 
   // Insert some records in transaction.
   ASSERT_OK(WriteRows(1 /* start */, 101 /* end */, &test_cluster_, {kValue2ColumnName}));
@@ -5111,6 +5217,59 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterWithSysCatalogComp
   }
   ASSERT_GE(record_size, 400);
   LOG(INFO) << "Total records read by GetChanges call, after alter table: " << record_size;
+}
+
+TEST_F(
+    CDCSDKYsqlTest,
+    YB_DISABLE_TEST_IN_TSAN(TestCDCSDKIntentsBatchReadWithAlterAndTabletLeaderSwitch)) {
+  const int num_tservers = 3;
+  FLAGS_enable_load_balancing = false;
+  FLAGS_cdc_max_stream_intent_records = 10;
+  FLAGS_consensus_max_batch_size_bytes = 1000;
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+  const uint32_t num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  // Create CDC stream.
+  CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
+  auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
+  ASSERT_FALSE(resp.has_error());
+
+  ASSERT_OK(WriteRowsHelper(1 /* start */, 101 /* end */, &test_cluster_, true));
+  // Call Getchanges
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+  GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
+  // Validate the columns and insert counts.
+  ValidateColumnCounts(change_resp, 2);
+
+  ASSERT_OK(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
+  ASSERT_OK(
+      WriteRowsHelper(101 /* start */, 201 /* end */, &test_cluster_, true, 3, {kValue2ColumnName}));
+  ASSERT_OK(test_client()->FlushTables(
+      {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+
+  size_t first_leader_index = -1;
+  size_t first_follower_index = -1;
+  GetTabletLeaderAndAnyFollowerIndex(tablets, &first_leader_index, &first_follower_index);
+  if (first_leader_index == 0) {
+    // We want to avoid the scenario where the first TServer is the leader, since we want to shut
+    // the leader TServer down and call GetChanges. GetChanges will be called on the cdc_proxy based
+    // on the first TServer's address and we want to avoid the network issues.
+    ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+  }
+  ASSERT_OK(ChangeLeaderOfTablet(first_follower_index, tablets[0].tablet_id()));
+  change_resp =
+      ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
+  ValidateColumnCounts(change_resp, 2);
 }
 
 }  // namespace enterprise

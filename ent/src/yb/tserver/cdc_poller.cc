@@ -66,6 +66,9 @@ DEFINE_test_flag(
 // Strings are usually not runtime safe but in our case its ok if we temporary read garbled data
 TAG_FLAG(TEST_xcluster_simulated_lag_tablet_filter, runtime);
 
+DEFINE_test_flag(bool, cdc_skip_replication_poll, false,
+                 "If true, polling will be skipped.");
+
 DECLARE_int32(cdc_read_rpc_timeout_ms);
 
 namespace yb {
@@ -163,6 +166,12 @@ void CDCPoller::Poll() {
 void CDCPoller::DoPoll() {
   RETURN_WHEN_OFFLINE();
 
+  if (PREDICT_FALSE(FLAGS_TEST_cdc_skip_replication_poll)) {
+    SleepFor(MonoDelta::FromMilliseconds(FLAGS_async_replication_idle_delay_ms));
+    Poll();
+    return;
+  }
+
   auto retained = shared_from_this();
   std::lock_guard<std::mutex> l(data_mutex_);
 
@@ -181,9 +190,9 @@ void CDCPoller::DoPoll() {
 
   const auto xcluster_simulated_lag_ms = GetAtomicFlag(&FLAGS_TEST_xcluster_simulated_lag_ms);
   if (PREDICT_FALSE(xcluster_simulated_lag_ms != 0)) {
-  ANNOTATE_IGNORE_READS_BEGIN();
-    const auto tablet_filter = FLAGS_TEST_xcluster_simulated_lag_tablet_filter;
-  ANNOTATE_IGNORE_READS_END();
+    auto flag_info =
+        gflags::GetCommandLineFlagInfoOrDie("TEST_xcluster_simulated_lag_tablet_filter");
+    const auto& tablet_filter = flag_info.current_value;
     const auto tablet_filter_list = strings::Split(tablet_filter, ",");
     if (tablet_filter.empty() || std::find(
                                      tablet_filter_list.begin(), tablet_filter_list.end(),
@@ -277,6 +286,14 @@ void CDCPoller::HandlePoll(yb::Status status,
                                       << resp_->error().code()
                                       << ", status=" << resp->error().status().DebugString();
     failed = true;
+
+    if (resp_->error().code() == cdc::CDCErrorPB::CHECKPOINT_TOO_OLD) {
+      cdc_consumer_->StoreReplicationError(
+        consumer_tablet_info_.tablet_id,
+        producer_tablet_info_.stream_id,
+        ReplicationErrorPb::REPLICATION_MISSING_OP_ID,
+        "Unable to find expected op id on the producer");
+    }
   } else if (!resp_->has_checkpoint()) {
     LOG_WITH_PREFIX_UNLOCKED(ERROR) << "CDCPoller failure: no checkpoint";
     failed = true;

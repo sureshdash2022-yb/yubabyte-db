@@ -91,6 +91,14 @@
 
 uint64_t yb_catalog_cache_version = YB_CATCACHE_VERSION_UNINITIALIZED;
 
+YbTserverCatalogInfo yb_tserver_catalog_info = NULL;
+
+/*
+ * Shared memory array db_catalog_versions_ index of the slot allocated for the
+ * MyDatabaseId.
+ */
+int yb_my_database_id_shm_index = -1;
+
 uint64_t YBGetActiveCatalogCacheVersion() {
 	if (yb_catalog_version_type == CATALOG_VERSION_CATALOG_TABLE &&
 	    YBGetDdlNestingLevel() > 0)
@@ -2753,4 +2761,25 @@ bool YBCIsRegionLocal(Relation rel) {
 			!IsSystemRelation(rel) &&
 			get_yb_tablespace_cost(rel->rd_rel->reltablespace, &cost) &&
 			cost <= yb_interzone_cost;
+}
+
+bool check_yb_xcluster_consistency_level(char** newval, void** extra, GucSource source) {
+  int newConsistency = XCLUSTER_CONSISTENCY_TABLET;
+  if (strcmp(*newval, "tablet") == 0) {
+    newConsistency = XCLUSTER_CONSISTENCY_TABLET;
+  } else if (strcmp(*newval, "database") == 0) {
+    newConsistency = XCLUSTER_CONSISTENCY_DATABASE;
+  } else {
+    return false;
+  }
+
+  *extra = malloc(sizeof(int));
+  if (!*extra) return false;
+  *((int*)*extra) = newConsistency;
+
+  return true;
+}
+
+void assign_yb_xcluster_consistency_level(const char* newval, void* extra) {
+  yb_xcluster_consistency_level = *((int*)extra);
 }

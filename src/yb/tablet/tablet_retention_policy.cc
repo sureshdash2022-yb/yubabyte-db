@@ -49,7 +49,7 @@ DEFINE_int32(timestamp_history_retention_interval_sec, 900,
              "Set this to be higher than the expected maximum duration of any single transaction "
              "in your application.");
 
-DEFINE_int32(cdc_syscatalog_history_retention_interval_sec, 900,
+DEFINE_int32(cdc_syscatalog_history_retention_interval_sec, 4 * 3600,
     "The time interval in seconds to retain syscatalog history for CDC to read specific schema "
     "version. Point-in-time reads at a hybrid time further than this in the past might not be "
     "allowed after a compaction. Set this to be higher than the expected maximum duration of any "
