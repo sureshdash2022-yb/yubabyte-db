@@ -5249,8 +5249,8 @@ TEST_F(
   ValidateColumnCounts(change_resp, 2);
 
   ASSERT_OK(AddColumn(&test_cluster_, kNamespaceName, kTableName, kValue2ColumnName));
-  ASSERT_OK(
-      WriteRowsHelper(101 /* start */, 201 /* end */, &test_cluster_, true, 3, {kValue2ColumnName}));
+  ASSERT_OK(WriteRowsHelper(
+      101 /* start */, 201 /* end */, &test_cluster_, true, 3, {kValue2ColumnName}));
   ASSERT_OK(test_client()->FlushTables(
       {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
       /* is_compaction = */ false));
