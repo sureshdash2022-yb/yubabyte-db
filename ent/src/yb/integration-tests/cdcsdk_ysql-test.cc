@@ -1434,6 +1434,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(AbortAllWriteOperations)) {
   }
   LOG(INFO) << "Got " << count[1] << " insert record and " << count[0] << " ddl record";
   CheckCount(expected_count, count);
+
 }
 
 // Insert one row, update the inserted row.
@@ -5147,7 +5148,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterWithSysCatalogComp
   const uint32_t num_tablets = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_timestamp_history_retention_interval_sec) = 0;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_rocksdb_level0_file_num_compaction_trigger) = 0;
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_syscatalog_history_retention_interval_sec) = 0;
 
   auto table = ASSERT_RESULT(CreateTable(
       &test_cluster_, kNamespaceName, kTableName, num_tablets, true, false, 0, false, "", "public",
@@ -5176,7 +5176,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestCDCSDKAlterWithSysCatalogComp
       301 /* start */, 401 /* end */, &test_cluster_,
       {kValue2ColumnName, kValue3ColumnName, kValue4ColumnName}));
 
-  ASSERT_OK(CompactSystemTable());
+  ASSERT_OK(test_cluster()->CompactTablets());
 
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
   auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
