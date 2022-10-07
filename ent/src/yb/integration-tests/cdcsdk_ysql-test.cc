@@ -403,11 +403,11 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
         statement.at(statement.size() - 1) = ')';
         RETURN_NOT_OK(conn.ExecuteFormat(statement, kTableName));
       }
-      if (flag) {
-        RETURN_NOT_OK(conn.Execute("COMMIT"));
-      } else {
-        RETURN_NOT_OK(conn.Execute("ABORT"));
-      }
+    }
+    if (flag) {
+      RETURN_NOT_OK(conn.Execute("COMMIT"));
+    } else {
+      RETURN_NOT_OK(conn.Execute("ABORT"));
     }
     return Status::OK();
   }
@@ -1408,6 +1408,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(SingleShardInsertWithAutoCommit))
   LOG(INFO) << "Got " << count[1] << " insert record";
   CheckCount(expected_count, count);
 }
+
 
 // Begin transaction, perform some operations and abort transaction.
 // Expected records: 1 (DDL).
