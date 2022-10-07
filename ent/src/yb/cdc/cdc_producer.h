@@ -71,13 +71,13 @@ Status GetChangesForCDCSDK(
     const std::shared_ptr<tablet::TabletPeer>& tablet_peer,
     const std::shared_ptr<MemTracker>& mem_tracker,
     const EnumOidLabelMap& enum_oid_label_map,
+    client::YBClient* client,
     consensus::ReplicateMsgsHolder* msgs_holder,
     GetChangesResponsePB* resp,
     std::string* commit_timestamp,
     std::shared_ptr<Schema>* cached_schema,
     uint32_t* cached_schema_version,
     OpId* last_streamed_op_id,
-    client::YBClient* client,
     int64_t* last_readable_opid_index = nullptr,
     const CoarseTimePoint deadline = CoarseTimePoint::max());
 
