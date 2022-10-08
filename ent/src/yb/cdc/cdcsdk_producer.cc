@@ -640,13 +640,18 @@ Status ProcessIntents(
       if (!result.ok()) {
         current_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
         *cached_schema_version = tablet_peer->tablet()->metadata()->schema_version();
-        LOG(WARNING) << "Failed to get the specific schema version from system catalog for table: "
-                     << tablet_peer->tablet()->metadata()->table_name()
-                     << " proceedings with the latest schema version.";
+        LOG(DFATAL)
+            << "Failed to get the specific schema version from system catalog for table: "
+            << tablet_peer->tablet()->metadata()->table_name()
+            << " with read hybrid time: " << keyValue.intent_ht.hybrid_time().ToUint64();
       } else {
         current_schema = result->first;
         *cached_schema_version = result->second;
         *cached_schema = std::make_shared<Schema>(result->first);
+        VLOG(1) << "Found schema version:" << *cached_schema_version
+                << " for table : " << tablet_peer->tablet()->metadata()->table_name()
+                << " from system catalog table with read hybrid time: "
+                << keyValue.intent_ht.hybrid_time().ToUint64();
       }
     }
     Slice value_slice = keyValue.value_buf;
@@ -967,14 +972,17 @@ Status GetChangesForCDCSDK(
           if (!result.ok()) {
             current_schema.CopyFrom(*tablet_peer->tablet()->schema().get());
             *cached_schema_version = tablet_peer->tablet()->metadata()->schema_version();
-            LOG(WARNING)
+            LOG(DFATAL)
                 << "Failed to get the specific schema version from system catalog for table: "
                 << tablet_peer->tablet()->metadata()->table_name()
-                << " proceedings with the latest schema version.";
+                << " with read hybrid time: " << msg->hybrid_time();
           } else {
             current_schema = result->first;
             *cached_schema_version = result->second;
           }
+          VLOG(1) << "Found schema version:" << *cached_schema_version
+                  << " for table : " << tablet_peer->tablet()->metadata()->table_name()
+                  << " from system catalog table with read hybrid time: " << msg->hybrid_time();
           schema_streamed = true;
           *cached_schema = std::make_shared<Schema>(std::move(current_schema));
           FillDDLInfo(tablet_peer, current_schema, *cached_schema_version, resp);
