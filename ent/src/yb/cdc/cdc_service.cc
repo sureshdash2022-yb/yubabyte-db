@@ -561,6 +561,7 @@ class CDCServiceImpl::Impl {
           .commit_timestamp = {},
           .current_schema = std::make_shared<Schema>(),
           .last_streamed_op_id = split_op_id,
+          .current_schema_version = std::numeric_limits<uint32_t>::max(),
           .mem_tracker = nullptr,
       });
     }
