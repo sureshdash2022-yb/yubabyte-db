@@ -5954,6 +5954,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentGCedWithTabletBootStrap
   CDCStreamId stream_id = ASSERT_RESULT(CreateDBStream(IMPLICIT));
   auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
   ASSERT_FALSE(resp.has_error());
+
+  EnableCDCServiceInAllTserver(3);
   // Insert some records.
   ASSERT_OK(WriteRows(0 /* start */, 100 /* end */, &test_cluster_));
 
@@ -5968,7 +5970,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentGCedWithTabletBootStrap
       }
     }
   }
-
+  SleepFor(MonoDelta::FromSeconds(10));
   for (size_t i = 0; i < test_cluster()->num_tablet_servers(); i++) {
     for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
       if (tablet_peer->tablet_id() == tablets[0].tablet_id()) {
