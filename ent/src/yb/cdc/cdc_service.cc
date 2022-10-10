@@ -1454,7 +1454,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
 }
 
 Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
-    const TabletId& tablet_id, const TabletCDCCheckpointInfo& cdc_checkpoint_min, bool bootstrap) {
+    const TabletId& tablet_id, const TabletCDCCheckpointInfo& cdc_checkpoint_min) {
   std::vector<client::internal::RemoteTabletServer *> servers;
   RETURN_NOT_OK(GetTServers(tablet_id, &servers));
 
@@ -1468,7 +1468,6 @@ Status CDCServiceImpl::UpdatePeersCdcMinReplicatedIndex(
     UpdateCdcReplicatedIndexRequestPB update_index_req;
     UpdateCdcReplicatedIndexResponsePB update_index_resp;
     update_index_req.add_tablet_ids(tablet_id);
-    update_index_req.set_bootstrap(bootstrap);
     update_index_req.add_replicated_indices(cdc_checkpoint_min.cdc_op_id.index);
     update_index_req.add_replicated_terms(cdc_checkpoint_min.cdc_op_id.term);
     cdc_checkpoint_min.cdc_sdk_op_id.ToPB(update_index_req.add_cdc_sdk_consumed_ops());
@@ -2212,25 +2211,22 @@ void CDCServiceImpl::UpdateCdcReplicatedIndex(const UpdateCdcReplicatedIndexRequ
   // If we fail to update at least one tablet, roll back the replicated index for all mutated
   // tablets.
   std::vector<const std::string*> rollback_tablet_id_vec;
-  auto scope_exit = ScopeExit([this, req, &rollback_tablet_id_vec] {
-    if (req->has_bootstrap() && req->bootstrap()) {
-      for (const auto& tablet_id : rollback_tablet_id_vec) {
-        VLOG(1) << "Rollbacking the cdc replicated index for the tablet_id: " << tablet_id;
-        RollbackCdcReplicatedIndexEntry(*tablet_id);
-      }
+  RollBackTabletIdCheckpointMap rollback_tablet_id_map;
+  auto scope_exit = ScopeExit([this, &rollback_tablet_id_map] {
+    for (const auto& [tablet_id, rollback_checkpoint_info] : rollback_tablet_id_map) {
+      VLOG(1) << "Rolling back the cdc replicated index for the tablet_id: " << tablet_id;
+      RollbackCdcReplicatedIndexEntry(*tablet_id, rollback_checkpoint_info);
     }
   });
 
   // Backwards compatibility for deprecated fields.
   if (req->has_tablet_id() && req->has_replicated_index()) {
-    rollback_tablet_id_vec.emplace_back(&req->tablet_id());
     Status s = UpdateCdcReplicatedIndexEntry(
-        req->tablet_id(),
-        req->replicated_index(),
-        OpId::Max(),
-        MonoDelta::FromMilliseconds(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms)));
+        req->tablet_id(), req->replicated_index(), OpId::Max(),
+        MonoDelta::FromMilliseconds(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms)),
+        &rollback_tablet_id_map);
     RPC_STATUS_RETURN_ERROR(s, resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
-    rollback_tablet_id_vec.clear();
+    rollback_tablet_id_map.clear();
     context.RespondSuccess();
     return;
   }
@@ -2256,25 +2252,28 @@ void CDCServiceImpl::UpdateCdcReplicatedIndex(const UpdateCdcReplicatedIndexRequ
         req->cdc_sdk_ops_expiration_ms().empty() ? GetAtomicFlag(&FLAGS_cdc_intent_retention_ms)
                                                  : req->cdc_sdk_ops_expiration_ms(i));
 
-    rollback_tablet_id_vec.emplace_back(&req->tablet_ids(i));
     Status s = UpdateCdcReplicatedIndexEntry(
-        req->tablet_ids(i),
-        req->replicated_indices(i),
-        cdc_sdk_op,
-        cdc_sdk_op_id_expiration);
+        req->tablet_ids(i), req->replicated_indices(i), cdc_sdk_op, cdc_sdk_op_id_expiration,
+        &rollback_tablet_id_map);
     RPC_STATUS_RETURN_ERROR(s, resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
   }
 
-  rollback_tablet_id_vec.clear();
+  rollback_tablet_id_map.clear();
   context.RespondSuccess();
 }
 
 Status CDCServiceImpl::UpdateCdcReplicatedIndexEntry(
     const string& tablet_id, int64 replicated_index, const OpId& cdc_sdk_replicated_op,
-    const MonoDelta& cdc_sdk_op_id_expiration) {
+    const MonoDelta& cdc_sdk_op_id_expiration,
+    RollBackTabletIdCheckpointMap* rollback_tablet_id_map) {
   auto tablet_peer = VERIFY_RESULT(context_->GetServingTablet(tablet_id));
   if (!tablet_peer->log_available()) {
     return STATUS(TryAgain, "Tablet peer is not ready to set its log cdc index");
+  }
+
+  if (rollback_tablet_id_map) {
+    (*rollback_tablet_id_map)[&tablet_id] = {
+        tablet_peer->get_cdc_min_replicated_index(), tablet_peer->cdc_sdk_min_checkpoint_op_id()};
   }
 
   RETURN_NOT_OK(tablet_peer->set_cdc_min_replicated_index(replicated_index));
@@ -2288,19 +2287,23 @@ Status CDCServiceImpl::UpdateCdcReplicatedIndexEntry(
   return Status::OK();
 }
 
-void CDCServiceImpl::RollbackCdcReplicatedIndexEntry(const string& tablet_id) {
+void CDCServiceImpl::RollbackCdcReplicatedIndexEntry(
+    const string& tablet_id, const pair<int64_t, OpId>& rollback_checkpoint_info) {
   auto tablet_peer = context_->GetServingTablet(tablet_id);
   if (!tablet_peer.ok()) {
     LOG(WARNING) << "Unable to rollback replicated index for " << tablet_id;
     return;
   }
 
-  const TabletCDCCheckpointInfo kOpIdMax;
-  WARN_NOT_OK((**tablet_peer).set_cdc_min_replicated_index(kOpIdMax.cdc_op_id.index),
-              "Unable to update min index for tablet $0 " + tablet_id);
-  WARN_NOT_OK((**tablet_peer).SetCDCSDKRetainOpIdAndTime(
-                kOpIdMax.cdc_op_id, kOpIdMax.cdc_sdk_op_id_expiration),
-              "Unable to update op id and expiration time for tablet $0 " + tablet_id);
+  WARN_NOT_OK(
+      (**tablet_peer).set_cdc_min_replicated_index(rollback_checkpoint_info.first),
+      "Unable to update min index for tablet $0 " + tablet_id);
+  WARN_NOT_OK(
+      (**tablet_peer)
+          .SetCDCSDKRetainOpIdAndTime(
+              rollback_checkpoint_info.second,
+              MonoDelta::FromMilliseconds(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms))),
+      "Unable to update op id and expiration time for tablet $0 " + tablet_id);
 }
 
 Result<OpId> CDCServiceImpl::TabletLeaderLatestEntryOpId(const TabletId& tablet_id) {
@@ -2837,7 +2840,7 @@ Status CDCServiceImpl::BootstrapProducerHelper(
       }
       // Even though we let each log independently take care of updating its own log checkpoint,
       // we still call the Update RPC when we create the replication stream.
-      RETURN_NOT_OK(UpdatePeersCdcMinReplicatedIndex(tablet.tablet_id(), op_id_min, true));
+      RETURN_NOT_OK(UpdatePeersCdcMinReplicatedIndex(tablet.tablet_id(), op_id_min));
 
       const auto op = cdc_state_table->NewWriteOp(QLWriteRequestPB::QL_STMT_INSERT);
       auto *const write_req = op->mutable_request();
