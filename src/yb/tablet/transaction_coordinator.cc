@@ -15,6 +15,9 @@
 
 #include "yb/tablet/transaction_coordinator.h"
 
+#include <atomic>
+#include <iterator>
+
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/mem_fun.hpp>
 #include <boost/multi_index/ordered_index.hpp>
@@ -176,7 +179,8 @@ class TransactionState {
       : context_(*context),
         id_(id),
         log_prefix_(BuildLogPrefix(parent_log_prefix, id)),
-        last_touch_(last_touch) {
+        last_touch_(last_touch),
+        is_external_(false) {
   }
 
   ~TransactionState() {
@@ -715,6 +719,7 @@ class TransactionState {
     commit_time_ = data.hybrid_time;
     // TODO(dtxn) Not yet implemented
     next_abort_after_sealing_ = CoarseMonoClock::now() + FLAGS_avoid_abort_after_sealing_ms * 1ms;
+    is_external_ = data.state.has_external_commit_ht();
     // TODO(savepoints) Savepoints with sealed transactions is not yet tested
     aborted_ = data.state.aborted();
     VLOG_WITH_PREFIX(4) << "Seal time: " << commit_time_;
@@ -991,6 +996,20 @@ class TransactionCoordinator::Impl : public TransactionStateContext,
     rpcs_.Shutdown();
   }
 
+  Status PrepareForDeletion(const CoarseTimePoint& deadline) {
+    VLOG_WITH_PREFIX(4) << __func__;
+
+    deleting_.store(true, std::memory_order_release);
+
+    std::unique_lock<std::mutex> lock(managed_mutex_);
+    if (!last_transaction_finished_.wait_until(
+            lock, deadline, [this]() { return managed_transactions_.empty(); })) {
+      return STATUS(TimedOut, "Timed out waiting for running transactions to complete");
+    }
+
+    return Status::OK();
+  }
+
   Status GetStatus(const google::protobuf::RepeatedPtrField<std::string>& transaction_ids,
                            CoarseTimePoint deadline,
                            tserver::GetTransactionStatusResponsePB* response) {
@@ -1207,6 +1226,7 @@ class TransactionCoordinator::Impl : public TransactionStateContext,
       return std::move(id.status());
     }
 
+    bool last_transaction = false;
     PostponedLeaderActions actions;
     Status result;
     {
@@ -1220,7 +1240,11 @@ class TransactionCoordinator::Impl : public TransactionStateContext,
         result = state.ProcessReplicated(data);
       });
       CheckCompleted(it);
+      last_transaction = managed_transactions_.empty();
       actions.Swap(&postponed_leader_actions_);
+    }
+    if (last_transaction) {
+      last_transaction_finished_.notify_one();
     }
     ExecutePostponedLeaderActions(&actions);
 
@@ -1236,6 +1260,7 @@ class TransactionCoordinator::Impl : public TransactionStateContext,
       return;
     }
 
+    bool last_transaction = false;
     PostponedLeaderActions actions;
     {
       std::lock_guard<std::mutex> lock(managed_mutex_);
@@ -1250,7 +1275,11 @@ class TransactionCoordinator::Impl : public TransactionStateContext,
             ts.ProcessAborted(data);
           });
       CheckCompleted(it);
+      last_transaction = managed_transactions_.empty();
       actions.Swap(&postponed_leader_actions_);
+    }
+    if (last_transaction) {
+      last_transaction_finished_.notify_one();
     }
     ExecutePostponedLeaderActions(&actions);
 
@@ -1286,19 +1315,12 @@ class TransactionCoordinator::Impl : public TransactionStateContext,
       }
       auto it = managed_transactions_.find(*id);
       if (it == managed_transactions_.end()) {
-        if (is_external ||
-            state.status() == TransactionStatus::CREATED ||
-            state.status() == TransactionStatus::PROMOTED) {
+        auto status = HandleTransactionNotFound(*id, state, is_external);
+        if (status.ok()) {
           it = managed_transactions_.emplace(
               this, *id, context_.clock().Now(), log_prefix_).first;
         } else {
           lock.unlock();
-          YB_LOG_HIGHER_SEVERITY_WHEN_TOO_MANY(INFO, WARNING, 1s, 50)
-              << LogPrefix() << "Request to unknown transaction " << id << ": "
-              << state.ShortDebugString();
-          auto status = STATUS_EC_FORMAT(
-              Expired, PgsqlError(YBPgErrorCode::YB_PG_T_R_SERIALIZATION_FAILURE),
-              "Transaction $0 expired or aborted by a conflict", *id);
           status = status.CloneAndAddErrorCode(TransactionError(TransactionErrorCode::kAborted));
           request->CompleteWithStatus(status);
           return;
@@ -1437,7 +1459,7 @@ class TransactionCoordinator::Impl : public TransactionStateContext,
             if (status.ok()) {
               return;
             }
-            if (status.IsTryAgain()) {
+            if (action.is_external && status.IsTryAgain()) {
               // We are trying to apply an external transaction on a tablet that is not caught up
               // to commit_ht, keep retrying until it succeeds.
               SendUpdateTransactionRequest(
@@ -1521,6 +1543,30 @@ class TransactionCoordinator::Impl : public TransactionStateContext,
       }
     }
     return it;
+  }
+
+  Status HandleTransactionNotFound(const TransactionId& id,
+                                   const TransactionStatePB& state,
+                                   bool is_external) {
+    if (!is_external &&
+        state.status() != TransactionStatus::CREATED &&
+        state.status() != TransactionStatus::PROMOTED) {
+      YB_LOG_WITH_PREFIX_HIGHER_SEVERITY_WHEN_TOO_MANY(INFO, WARNING, 1s, 50)
+          << "Request to unknown transaction " << id << ": "
+          << state.ShortDebugString();
+      return STATUS_EC_FORMAT(
+          Expired, PgsqlError(YBPgErrorCode::YB_PG_T_R_SERIALIZATION_FAILURE),
+          "Transaction $0 expired or aborted by a conflict", *id);
+    }
+
+    if (deleting_.load(std::memory_order_acquire)) {
+      YB_LOG_WITH_PREFIX_EVERY_N_SECS(WARNING, 1)
+          << "Rejecting new transaction because status tablet is being deleted";
+      return STATUS_FORMAT(
+          Aborted, "Transaction $0 rejected because status tablet is being deleted", id);
+    }
+
+    return Status::OK();
   }
 
   TransactionCoordinatorContext& coordinator_context() override {
@@ -1637,6 +1683,9 @@ class TransactionCoordinator::Impl : public TransactionStateContext,
   std::mutex managed_mutex_;
   ManagedTransactions managed_transactions_;
 
+  std::atomic<bool> deleting_{false};
+  std::condition_variable last_transaction_finished_;
+
   // Actions that should be executed after mutex is unlocked.
   PostponedLeaderActions postponed_leader_actions_;
 
@@ -1684,6 +1733,10 @@ void TransactionCoordinator::Start() {
 
 void TransactionCoordinator::Shutdown() {
   impl_->Shutdown();
+}
+
+Status TransactionCoordinator::PrepareForDeletion(const CoarseTimePoint& deadline) {
+  return impl_->PrepareForDeletion(deadline);
 }
 
 Status TransactionCoordinator::GetStatus(

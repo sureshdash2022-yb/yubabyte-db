@@ -1248,6 +1248,29 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
     }
   }
 
+  protected AnsibleConfigureServers.Params createCertUpdateParams(
+      UserIntent userIntent,
+      NodeDetails node,
+      NodeManager.CertRotateAction certRotateAction,
+      CertsRotateParams.CertRotationType rootCARotationType,
+      CertsRotateParams.CertRotationType clientRootCARotationType) {
+    AnsibleConfigureServers.Params params =
+        getAnsibleConfigureServerParams(
+            node,
+            ServerType.TSERVER,
+            UpgradeTaskParams.UpgradeTaskType.Certs,
+            UpgradeTaskParams.UpgradeTaskSubType.None);
+    params.enableNodeToNodeEncrypt = userIntent.enableNodeToNodeEncrypt;
+    params.enableClientToNodeEncrypt = userIntent.enableClientToNodeEncrypt;
+    params.rootCA = taskParams().rootCA;
+    params.clientRootCA = taskParams().clientRootCA;
+    params.rootAndClientRootCASame = taskParams().rootAndClientRootCASame;
+    params.rootCARotationType = rootCARotationType;
+    params.clientRootCARotationType = clientRootCARotationType;
+    params.certRotateAction = certRotateAction;
+    return params;
+  }
+
   protected void createCertUpdateTasks(
       Collection<NodeDetails> nodes,
       NodeManager.CertRotateAction certRotateAction,
@@ -1262,19 +1285,8 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
 
     for (NodeDetails node : nodes) {
       AnsibleConfigureServers.Params params =
-          getAnsibleConfigureServerParams(
-              node,
-              ServerType.TSERVER,
-              UpgradeTaskParams.UpgradeTaskType.Certs,
-              UpgradeTaskParams.UpgradeTaskSubType.None);
-      params.enableNodeToNodeEncrypt = userIntent.enableNodeToNodeEncrypt;
-      params.enableClientToNodeEncrypt = userIntent.enableClientToNodeEncrypt;
-      params.rootCA = taskParams().rootCA;
-      params.clientRootCA = taskParams().clientRootCA;
-      params.rootAndClientRootCASame = taskParams().rootAndClientRootCASame;
-      params.rootCARotationType = rootCARotationType;
-      params.clientRootCARotationType = clientRootCARotationType;
-      params.certRotateAction = certRotateAction;
+          createCertUpdateParams(
+              userIntent, node, certRotateAction, rootCARotationType, clientRootCARotationType);
       AnsibleConfigureServers task = createTask(AnsibleConfigureServers.class);
       task.initialize(params);
       task.setUserTaskUUID(userTaskUUID);
@@ -1290,17 +1302,11 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
         String.format(
             "AnsibleConfigureServers (%s) for: %s", subTaskGroupType, taskParams().nodePrefix);
     SubTaskGroup subTaskGroup = getTaskExecutor().createSubTaskGroup(subGroupDescription, executor);
+    UserIntent userIntent = getUserIntent();
+
     for (NodeDetails node : nodes) {
       AnsibleConfigureServers.Params params =
-          getAnsibleConfigureServerParams(
-              node,
-              ServerType.CONTROLLER,
-              UpgradeTaskParams.UpgradeTaskType.Certs,
-              UpgradeTaskParams.UpgradeTaskSubType.None);
-      params.enableNodeToNodeEncrypt = getUserIntent().enableNodeToNodeEncrypt;
-      params.enableClientToNodeEncrypt = getUserIntent().enableClientToNodeEncrypt;
-      params.rootAndClientRootCASame = taskParams().rootAndClientRootCASame;
-      params.certRotateAction = NodeManager.CertRotateAction.UPDATE_CERT_DIRS;
+          createUpdateCertDirParams(userIntent, node, ServerType.CONTROLLER);
       AnsibleConfigureServers task = createTask(AnsibleConfigureServers.class);
       task.initialize(params);
       task.setUserTaskUUID(userTaskUUID);
@@ -1316,17 +1322,11 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
         String.format(
             "AnsibleConfigureServers (%s) for: %s", subTaskGroupType, taskParams().nodePrefix);
     SubTaskGroup subTaskGroup = getTaskExecutor().createSubTaskGroup(subGroupDescription, executor);
+    UserIntent userIntent = getUserIntent();
+
     for (NodeDetails node : nodes) {
       AnsibleConfigureServers.Params params =
-          getAnsibleConfigureServerParams(
-              node,
-              serverType,
-              UpgradeTaskParams.UpgradeTaskType.Certs,
-              UpgradeTaskParams.UpgradeTaskSubType.None);
-      params.enableNodeToNodeEncrypt = getUserIntent().enableNodeToNodeEncrypt;
-      params.enableClientToNodeEncrypt = getUserIntent().enableClientToNodeEncrypt;
-      params.rootAndClientRootCASame = taskParams().rootAndClientRootCASame;
-      params.certRotateAction = NodeManager.CertRotateAction.UPDATE_CERT_DIRS;
+          createUpdateCertDirParams(userIntent, node, serverType);
       AnsibleConfigureServers task = createTask(AnsibleConfigureServers.class);
       task.initialize(params);
       task.setUserTaskUUID(userTaskUUID);
@@ -1334,6 +1334,21 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
     }
     subTaskGroup.setSubTaskGroupType(subTaskGroupType);
     getRunnableTask().addSubTaskGroup(subTaskGroup);
+  }
+
+  protected AnsibleConfigureServers.Params createUpdateCertDirParams(
+      UserIntent userIntent, NodeDetails node, ServerType serverType) {
+    AnsibleConfigureServers.Params params =
+        getAnsibleConfigureServerParams(
+            node,
+            serverType,
+            UpgradeTaskParams.UpgradeTaskType.Certs,
+            UpgradeTaskParams.UpgradeTaskSubType.None);
+    params.enableNodeToNodeEncrypt = userIntent.enableNodeToNodeEncrypt;
+    params.enableClientToNodeEncrypt = userIntent.enableClientToNodeEncrypt;
+    params.rootAndClientRootCASame = taskParams().rootAndClientRootCASame;
+    params.certRotateAction = NodeManager.CertRotateAction.UPDATE_CERT_DIRS;
+    return params;
   }
 
   protected UniverseSetTlsParams.Params createSetTlsParams(SubTaskGroupType subTaskGroupType) {

@@ -225,6 +225,11 @@ void TabletInfo::UpdateReplicaDriveInfo(const std::string& ts_uuid,
   it->second.UpdateDriveInfo(drive_info);
 }
 
+std::unordered_map<CDCStreamId, uint64_t>  TabletInfo::GetReplicationStatus() {
+  std::lock_guard<simple_spinlock> l(lock_);
+  return replication_stream_to_status_bitmask_;
+}
+
 void TabletInfo::set_last_update_time(const MonoTime& ts) {
   std::lock_guard<simple_spinlock> l(lock_);
   last_update_time_ = ts;
@@ -251,6 +256,16 @@ uint32_t TabletInfo::reported_schema_version(const TableId& table_id) {
     return 0;
   }
   return reported_schema_version_[table_id];
+}
+
+void TabletInfo::SetInitiaLeaderElectionProtege(const std::string& protege_uuid) {
+  std::lock_guard<simple_spinlock> l(lock_);
+  initial_leader_election_protege_ = protege_uuid;
+}
+
+std::string TabletInfo::InitiaLeaderElectionProtege() {
+  std::lock_guard<simple_spinlock> l(lock_);
+  return initial_leader_election_protege_;
 }
 
 bool TabletInfo::colocated() const {
@@ -686,7 +701,7 @@ bool TableInfo::HasTasks() const {
   return !pending_tasks_.empty();
 }
 
-bool TableInfo::HasTasks(server::MonitoredTask::Type type) const {
+bool TableInfo::HasTasks(server::MonitoredTaskType type) const {
   SharedLock<decltype(lock_)> l(lock_);
   for (auto task : pending_tasks_) {
     if (task->type() == type) {

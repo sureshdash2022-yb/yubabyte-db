@@ -232,12 +232,7 @@ DEFINE_test_flag(int32, sleep_after_tombstoning_tablet_secs, 0,
 DEFINE_bool(enable_restart_transaction_status_tablets_first, true,
             "Set to true to prioritize bootstrapping transaction status tablets first.");
 
-DEFINE_bool(enable_wait_queue_based_pessimistic_locking, false,
-            "If true, use pessimistic locking behavior in conflict resolution.");
-TAG_FLAG(enable_wait_queue_based_pessimistic_locking, evolving);
-TAG_FLAG(enable_wait_queue_based_pessimistic_locking, hidden);
-
-DECLARE_bool(auto_promote_nonlocal_transactions_to_global);
+DECLARE_bool(enable_wait_queue_based_pessimistic_locking);
 
 DECLARE_string(rocksdb_compact_flush_rate_limit_sharing_mode);
 
@@ -488,14 +483,8 @@ Status TSTabletManager::Init() {
                                                                       local_peer_pb_.cloud_info());
 
   if (FLAGS_enable_wait_queue_based_pessimistic_locking) {
-    if (FLAGS_auto_promote_nonlocal_transactions_to_global) {
-      LOG(WARNING) << "Ignoring enable_wait_queue_based_pessimistic_locking=true since "
-                   << "auto_promote_nonlocal_transactions_to_global is enabled. These two features "
-                   << "are not yet supported together.";
-    } else {
-      waiting_txn_registry_ = std::make_unique<tablet::LocalWaitingTxnRegistry>(
-          client_future(), scoped_refptr<server::Clock>(server_->clock()));
-    }
+    waiting_txn_registry_ = std::make_unique<tablet::LocalWaitingTxnRegistry>(
+        client_future(), scoped_refptr<server::Clock>(server_->clock()));
   }
 
   deque<RaftGroupMetadataPtr> metas;
@@ -1273,6 +1262,7 @@ Status TSTabletManager::DeleteTablet(
     tablet::ShouldAbortActiveTransactions should_abort_active_txns,
     const boost::optional<int64_t>& cas_config_opid_index_less_or_equal,
     bool hide_only,
+    bool keep_data,
     boost::optional<TabletServerErrorPB::Code>* error_code) {
 
   if (delete_type != TABLET_DATA_DELETED && delete_type != TABLET_DATA_TOMBSTONED) {
@@ -1347,20 +1337,22 @@ Status TSTabletManager::DeleteTablet(
 
   yb::OpId last_logged_opid = tablet_peer->GetLatestLogEntryOpId();
 
-  Status s = DeleteTabletData(meta,
-                              delete_type,
-                              fs_manager_->uuid(),
-                              last_logged_opid,
-                              this);
-  if (PREDICT_FALSE(!s.ok())) {
-    s = s.CloneAndPrepend(Substitute("Unable to delete on-disk data from tablet $0",
-                                     tablet_id));
-    LOG(WARNING) << s.ToString();
-    tablet_peer->SetFailed(s);
-    return s;
-  }
+  if (!keep_data) {
+    Status s = DeleteTabletData(meta,
+                                delete_type,
+                                fs_manager_->uuid(),
+                                last_logged_opid,
+                                this);
+    if (PREDICT_FALSE(!s.ok())) {
+      s = s.CloneAndPrepend(Substitute("Unable to delete on-disk data from tablet $0",
+                                       tablet_id));
+      LOG(WARNING) << s.ToString();
+      tablet_peer->SetFailed(s);
+      return s;
+    }
 
-  tablet_peer->status_listener()->StatusMessage("Deleted tablet blocks from disk");
+    tablet_peer->status_listener()->StatusMessage("Deleted tablet blocks from disk");
+  }
 
   // We only remove DELETED tablets from the tablet map.
   if (delete_type == TABLET_DATA_DELETED) {

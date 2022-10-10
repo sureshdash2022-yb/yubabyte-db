@@ -107,6 +107,9 @@ public class NodeAgent extends Model {
   public String ip;
 
   @ApiModelProperty(accessMode = READ_ONLY)
+  public int port;
+
+  @ApiModelProperty(accessMode = READ_ONLY)
   public UUID customerUuid;
 
   @ApiModelProperty(accessMode = READ_ONLY)
@@ -219,5 +222,16 @@ public class NodeAgent extends Model {
   public void saveState(State state) {
     this.state = state;
     save();
+  }
+
+  public boolean updateState(State newState) {
+    return db().update(NodeAgent.class)
+            .set("state", newState)
+            .set("updatedAt", new Date())
+            .where()
+            .eq("uuid", uuid)
+            .eq("state", state)
+            .update()
+        > 0;
   }
 }
