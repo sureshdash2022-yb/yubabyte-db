@@ -3579,7 +3579,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestEnumWithMultipleTablets)) {
         /* is_compaction = */ false));
     int total_count = 0;
     vector<GetChangesResponsePB> change_resp(3);
-    change_resp.clear();
     ASSERT_OK(WaitFor(
         [&]() -> Result<bool> {
           while (true) {
