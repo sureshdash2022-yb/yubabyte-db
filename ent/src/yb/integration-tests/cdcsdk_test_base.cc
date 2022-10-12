@@ -231,6 +231,7 @@ Result<YBTableName> CDCSDKTestBase::CreateTable(
     RETURN_NOT_OK(conn.ExecuteFormat(
         "CREATE TYPE $0.coupon_discount_type$1 AS ENUM ('FIXED$2','PERCENTAGE$3');", schema_name,
         enum_suffix, enum_suffix, enum_suffix));
+
   }
 
   std::string table_oid_string = "";
